@@ -60,7 +60,7 @@ const poseIndex: Record<CharacterState, number> = {
 const stateLabel: Record<CharacterState, string> = {
   idle: '等待召唤',
   thinking: '正在思考',
-  speaking: '正在发言',
+  speaking: '刚刚发言',
   listening: '正在倾听',
   victory: '赢得本局',
   defeat: '接受结果',
@@ -107,7 +107,12 @@ function buildMockReply(role: Role, message: string, index: number, heardOther: 
     `请做一个压力测试：如果结果比预期差一半，你仍愿意承担代价吗？如果答案是否定的，那就不要让乐观替你签字。`,
   ];
   const pool = role === 'angel' ? angelReplies : devilReplies;
-  return pool[index % pool.length];
+  if (index < pool.length) return pool[index];
+
+  const summonNumber = index + 1;
+  return role === 'angel'
+    ? `这是我第 ${summonNumber} 次为 Yes 辩护，所以不再重复“试试看”。请为「${focus}」写下最小行动、最晚复盘时间和一个停止条件。三项都能写清，我仍支持你去做；写不清，就先补信息。`
+    : `这是我第 ${summonNumber} 次为 No 辩护，我不想只重复“有风险”。请为「${focus}」列出一项不可逆成本、一项被挤占的事和一个你仍未确认的事实。只要其中一项说不清，我就建议先不做。`;
 }
 
 function CharacterFigure({ role, state, compact = false }: { role: Role; state: CharacterState; compact?: boolean }) {
@@ -321,7 +326,7 @@ function Composer({ disabled, onSummon, onNewTurn, onDecide }: { disabled: boole
           {error ? <span className="composer-error">先写下你要补充的内容</span> : <span>发送给</span>}
           <Button onClick={() => submitTo('angel')} disabled={disabled} variant="ghost"><Feather /> 天使</Button>
           <Button onClick={() => submitTo('devil')} disabled={disabled} variant="ghost"><Flame /> 恶魔</Button>
-          <Button onClick={onDecide} className="mobile-decide"><Gavel /> 决定</Button>
+          <Button onClick={onDecide} className="mobile-decide"><Gavel /> 作出决定</Button>
         </div>
       </div>
     </div>

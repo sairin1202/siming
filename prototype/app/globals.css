@@ -185,7 +185,7 @@ button, textarea { font: inherit; }
 }
 
 /* Decision stage */
-.stage-shell { height: 100svh; min-height: 620px; overflow: hidden; background: radial-gradient(circle at 50% -15%, rgba(107,82,139,.27), transparent 34%), linear-gradient(180deg, #111023 0%, #070711 100%); }
+.stage-shell { height: 100svh; min-height: 620px; overflow: clip; background: radial-gradient(circle at 50% -15%, rgba(107,82,139,.27), transparent 34%), linear-gradient(180deg, #111023 0%, #070711 100%); }
 .stage-shell::before { content: ''; position: fixed; inset: 84px 0 0; pointer-events: none; opacity: .24; background-image: linear-gradient(rgba(227,208,159,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(227,208,159,.025) 1px, transparent 1px); background-size: 42px 42px; }
 .decision-heading { position: absolute; left: 50%; max-width: min(44vw, 630px); transform: translateX(-50%); text-align: center; }
 .decision-heading small { display: block; color: #8f869a; font-size: 8px; letter-spacing: .18em; text-transform: uppercase; }
@@ -243,7 +243,7 @@ button, textarea { font: inherit; }
 .agent-message--devil .message-role svg { color: #9c3249; }
 .message-role strong { color: #4a3b4d; font-size: 11px; }
 .message-role small { color: #a1949d; font-size: 8px; letter-spacing: .12em; }
-.agent-message p { margin: 7px 0 0 29px; color: #4b414d; font-size: 12px; line-height: 1.72; }
+.agent-message p { margin: 7px 0 0 29px; color: #4b414d; font-size: 13px; line-height: 1.75; }
 .thinking-message { display: flex; align-items: center; gap: 5px; padding: 10px 14px; color: #817582; font-size: 10px; }
 .thinking-message span { width: 5px; height: 5px; border-radius: 50%; background: #ac8746; animation: thinking-dot 1s ease-in-out infinite; }
 .thinking-message span:nth-child(2) { animation-delay: .15s; }
@@ -343,7 +343,7 @@ button, textarea { font: inherit; }
   .current-turn-actions { padding: 8px 0; }
   .current-turn-actions > span { display: none; }
   .new-turn-box textarea { min-height: 48px; }
-  .mobile-decide { display: inline-flex !important; margin-left: 3px; background: #2a2034; color: #e7c980 !important; }
+  .mobile-decide { display: inline-flex !important; margin-left: 3px; border: 1px solid rgba(218,180,104,.5); background: #2a2034; color: #e7c980 !important; font-weight: 600; box-shadow: 0 4px 14px rgba(39,25,48,.18); }
   .verdict-options { grid-template-columns: 1fr; }
   .result-overlay { grid-template-columns: 1fr 1fr; grid-template-rows: 44vh 1fr; align-items: end; }
   .result-loser { grid-column: 1; grid-row: 1; height: 35vh; }
