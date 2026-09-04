@@ -255,7 +255,24 @@ Angel & Devil 是帮助用户梳理想法的说服工具，不是医疗、法律
 - [x] 确认自由召唤与共享上下文机制
 - [x] 确认轮次和胜负结算规则
 - [x] 明确角色画面为核心体验
-- [ ] 完成视觉方向与角色设定
-- [ ] 确定技术方案
-- [ ] 实现可交互原型
+- [x] 完成“新塔罗 × 动画赛璐璐”视觉方向与角色设定
+- [x] 确定 React 状态机、透明角色立绘与 CSS 动效方案
+- [x] 实现可交互的响应式前端原型
+
+## 原型存档
+
+- 可交互原型源码位于 [`prototype/`](prototype/)。
+- 角色状态图与分享图源文件位于 [`generated-art/`](generated-art/)。
+- 视觉及交互设计稿位于 [`docs/superpowers/specs/2026-09-03-angel-devil-visual-prototype-design.md`](docs/superpowers/specs/2026-09-03-angel-devil-visual-prototype-design.md)。
+- 已发布的私有预览：[Angel & Devil 决策舞台](https://angel-devil-decision.hazy-fly-5505.chatgpt.site)。
+
+本地运行需要 Node.js 22.13 或更高版本：
+
+```bash
+cd prototype
+npm install
+npm run dev
+```
+
+执行 `npm run build` 可生成 Sites 部署产物。依赖目录与构建产物不纳入 Git，它们可通过 `package-lock.json` 恢复。
 - [ ] 完成 MVP
