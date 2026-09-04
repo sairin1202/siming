@@ -258,6 +258,9 @@ Angel & Devil 是帮助用户梳理想法的说服工具，不是医疗、法律
 - [x] 完成“新塔罗 × 动画赛璐璐”视觉方向与角色设定
 - [x] 确定 React 状态机、透明角色立绘与 CSS 动效方案
 - [x] 实现可交互的响应式前端原型
+- [x] 接入真实天使 / 恶魔 Agent 提示词与完整共享上下文
+- [x] 实现流式回复、瞬时错误自动重试和原位手动重试
+- [x] 实现请求校验、提示注入防护和高风险 / 危机安全分流
 
 ## 原型存档
 
@@ -271,8 +274,14 @@ Angel & Devil 是帮助用户梳理想法的说服工具，不是医疗、法律
 ```bash
 cd prototype
 npm install
+cp .env.example .env.local
+# 编辑 .env.local，填入 NevaToken API key 和控制台显示的 Luna 模型 ID
 npm run dev
 ```
+
+Agent 默认通过 `https://nevatoken.com/v1/chat/completions` 调用
+`MaaS_GP_5.6_luna_20260709`；两者都可在 `.env.local` 中覆盖。API key 仅由服务端
+读取，不会发送到浏览器。
 
 执行 `npm run build` 可生成 Sites 部署产物。依赖目录与构建产物不纳入 Git，它们可通过 `package-lock.json` 恢复。
 - [ ] 完成 MVP

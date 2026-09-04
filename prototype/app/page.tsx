@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type SubmitEvent } from 'react';
 import {
   ArrowRight,
   ChevronRight,
@@ -9,7 +9,6 @@ import {
   Gavel,
   MessageCircleMore,
   RotateCcw,
-  Send,
   Sparkles,
   Swords,
   X,
@@ -29,11 +28,18 @@ import { Textarea } from '@/components/ui/textarea';
 type Role = 'angel' | 'devil';
 type CharacterState = 'idle' | 'thinking' | 'speaking' | 'listening' | 'victory' | 'defeat';
 type Verdict = 'yes' | 'no';
+type ReplyStatus = 'streaming' | 'complete' | 'error';
 
 type Reply = {
   id: string;
   role: Role;
   content: string;
+  status: ReplyStatus;
+  error?: {
+    message: string;
+    retryable: boolean;
+  };
+  safetyMode?: 'standard' | 'high_stakes' | 'crisis';
 };
 
 type Turn = {
@@ -47,6 +53,22 @@ type Decision = {
   turns: Turn[];
   verdict: Verdict | null;
 };
+
+type AgentStreamEvent =
+  | { type: 'meta'; safetyMode: 'standard' | 'high_stakes' | 'crisis' }
+  | { type: 'delta'; content: string }
+  | { type: 'done' }
+  | { type: 'error'; code: string; message: string; retryable: boolean };
+
+class AgentClientError extends Error {
+  retryable: boolean;
+
+  constructor(message: string, retryable = true) {
+    super(message);
+    this.name = 'AgentClientError';
+    this.retryable = retryable;
+  }
+}
 
 const poseIndex: Record<CharacterState, number> = {
   idle: 0,
@@ -85,48 +107,19 @@ function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function focusOf(message: string) {
-  const trimmed = message.trim().replace(/[？?。！!]+$/, '');
-  return trimmed.length > 25 ? `${trimmed.slice(0, 25)}…` : trimmed;
-}
-
-function buildMockReply(role: Role, message: string, index: number, heardOther: boolean) {
-  const focus = focusOf(message);
-  const angelReplies = [
-    `我会先问：如果「${focus}」真的值得，你能不能把它缩成一个可逆的小实验？先试一小步，不等于把所有筹码都押上。`,
-    heardOther
-      ? `风险当然存在，但风险不是自动放弃的理由。给自己设一个明确的退出条件，再争取一次真实反馈，你会比一直想象更接近答案。`
-      : `你已经为这件事停下来认真衡量，说明它对你有真实吸引力。与其等待百分之百确定，不如先确定最小投入和验收点。`,
-    `从半年后的视角看，最可能遗憾的也许不是一次不完美的尝试，而是从未验证过自己的判断。我的建议是：带着边界去做。`,
-  ];
-  const devilReplies = [
-    `先别把“可以尝试”误当成“现在就该做”。围绕「${focus}」，你真正要付出的时间、注意力和放弃其他机会的成本，算清了吗？`,
-    heardOther
-      ? `天使提出了可逆试验，但“小试一下”也会占用精力。除非成功标准、截止时间和退出方式都能提前写下来，否则它很容易变成没有边界的承诺。`
-      : `犹豫不一定是胆怯，也可能是信息不足。今天不答应并不代表永远拒绝；先补齐最关键的信息，暂停本身就是一种选择。`,
-    `请做一个压力测试：如果结果比预期差一半，你仍愿意承担代价吗？如果答案是否定的，那就不要让乐观替你签字。`,
-  ];
-  const pool = role === 'angel' ? angelReplies : devilReplies;
-  if (index < pool.length) return pool[index];
-
-  const summonNumber = index + 1;
-  return role === 'angel'
-    ? `这是我第 ${summonNumber} 次为 Yes 辩护，所以不再重复“试试看”。请为「${focus}」写下最小行动、最晚复盘时间和一个停止条件。三项都能写清，我仍支持你去做；写不清，就先补信息。`
-    : `这是我第 ${summonNumber} 次为 No 辩护，我不想只重复“有风险”。请为「${focus}」列出一项不可逆成本、一项被挤占的事和一个你仍未确认的事实。只要其中一项说不清，我就建议先不做。`;
-}
-
-function CharacterFigure({ role, state, compact = false }: { role: Role; state: CharacterState; compact?: boolean }) {
-  const copy = roleCopy[role];
+function CharacterFigure({ side, state, compact = false }: { side: Role; state: CharacterState; compact?: boolean }) {
+  const copy = roleCopy[side];
 
   return (
     <div
-      className={`character-figure character-figure--${role} character-figure--${state}${compact ? ' character-figure--compact' : ''}`}
+      className={`character-figure character-figure--${side} character-figure--${state}${compact ? ' character-figure--compact' : ''}`}
       style={{ '--pose': poseIndex[state] } as React.CSSProperties}
     >
       <div className="character-aura" aria-hidden="true" />
       <div className="character-rings" aria-hidden="true"><i /><i /><i /></div>
       <div className="character-sprite">
-        <img src={`/characters/${role}-states.png`} alt={`${copy.name} · ${stateLabel[state]}`} />
+        {/* oxlint-disable-next-line next/no-img-element -- sprite sheets rely on exact CSS cropping. */}
+        <img src={`/characters/${side}-states.png`} alt={`${copy.name} · ${stateLabel[state]}`} />
       </div>
     </div>
   );
@@ -137,7 +130,7 @@ function StartScreen({ onStart }: { onStart: (question: string, role: Role) => v
   const [question, setQuestion] = useState('');
   const [showError, setShowError] = useState(false);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  function submit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!question.trim()) {
       setShowError(true);
@@ -154,8 +147,8 @@ function StartScreen({ onStart }: { onStart: (question: string, role: Role) => v
 
       <section className="opening-stage" aria-labelledby="opening-title">
         <div className="intro-character intro-character--angel">
-          <CharacterFigure role="angel" state="idle" />
-          <CharacterCaption role="angel" />
+          <CharacterFigure side="angel" state="idle" />
+          <CharacterCaption side="angel" />
         </div>
 
         <div className="opening-copy" id="decision">
@@ -196,8 +189,8 @@ function StartScreen({ onStart }: { onStart: (question: string, role: Role) => v
         </div>
 
         <div className="intro-character intro-character--devil">
-          <CharacterFigure role="devil" state="idle" />
-          <CharacterCaption role="devil" />
+          <CharacterFigure side="devil" state="idle" />
+          <CharacterCaption side="devil" />
         </div>
       </section>
     </main>
@@ -226,10 +219,10 @@ function AppHeader({ room = '01', title, turnCount, onDecide }: { room?: string;
   );
 }
 
-function CharacterCaption({ role }: { role: Role }) {
-  const copy = roleCopy[role];
+function CharacterCaption({ side }: { side: Role }) {
+  const copy = roleCopy[side];
   return (
-    <div className={`character-caption character-caption--${role}`}>
+    <div className={`character-caption character-caption--${side}`}>
       <span>{copy.camp}</span>
       <strong>{copy.name}</strong>
       <small>{copy.short}</small>
@@ -237,24 +230,35 @@ function CharacterCaption({ role }: { role: Role }) {
   );
 }
 
-function CharacterPanel({ role, state, disabled, onSummon }: { role: Role; state: CharacterState; disabled: boolean; onSummon: () => void }) {
-  const copy = roleCopy[role];
+function CharacterPanel({ side, state, disabled, onSummon }: { side: Role; state: CharacterState; disabled: boolean; onSummon: () => void }) {
+  const copy = roleCopy[side];
   return (
-    <button className={`character-panel character-panel--${role} is-${state}`} onClick={onSummon} disabled={disabled} aria-label={`${copy.summon}，当前${stateLabel[state]}`}>
+    <button className={`character-panel character-panel--${side} is-${state}`} onClick={onSummon} disabled={disabled} aria-label={`${copy.summon}，当前${stateLabel[state]}`}>
       <span className="panel-state"><i /> {stateLabel[state]}</span>
-      <CharacterFigure role={role} state={state} />
-      <CharacterCaption role={role} />
+      <CharacterFigure side={side} state={state} />
+      <CharacterCaption side={side} />
       <span className="summon-hint"><MessageCircleMore /> 点击角色 · {copy.summon}</span>
     </button>
   );
 }
 
-function Conversation({ turns, thinkingRole }: { turns: Turn[]; thinkingRole: Role | null }) {
+function Conversation({
+  turns,
+  activeReplyId,
+  onRetry,
+}: {
+  turns: Turn[];
+  activeReplyId: string | null;
+  onRetry: (turnId: string, replyId: string) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const activeReply = turns
+    .flatMap((turn) => turn.responses)
+    .find((reply) => reply.id === activeReplyId);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [turns, thinkingRole]);
+  }, [turns, activeReplyId]);
 
   return (
     <div className="conversation-scroll" ref={scrollRef} aria-live="polite">
@@ -270,19 +274,34 @@ function Conversation({ turns, thinkingRole }: { turns: Turn[]; thinkingRole: Ro
             <p>{turn.userMessage}</p>
           </div>
           <div className="responses">
-            {turn.responses.map((reply) => (
-              <article className={`agent-message agent-message--${reply.role}`} key={reply.id}>
-                <div className="message-role">
-                  <span>{reply.role === 'angel' ? <Feather /> : <Flame />}</span>
-                  <strong>{roleCopy[reply.role].name}</strong>
-                  <small>{roleCopy[reply.role].camp}</small>
-                </div>
-                <p>{reply.content}</p>
-              </article>
-            ))}
-            {thinkingRole && turnIndex === turns.length - 1 ? (
-              <div className={`thinking-message thinking-message--${thinkingRole}`}>
-                <span /><span /><span /> {roleCopy[thinkingRole].name}正在整理观点
+            {turn.responses.map((reply) =>
+              reply.content || reply.status === 'error' ? (
+                <article
+                  className={`agent-message agent-message--${reply.role}${reply.status === 'streaming' ? ' is-streaming' : ''}${reply.safetyMode === 'crisis' ? ' is-safety' : ''}`}
+                  key={reply.id}
+                >
+                  <div className="message-role">
+                    <span>{reply.role === 'angel' ? <Feather /> : <Flame />}</span>
+                    <strong>{reply.safetyMode === 'crisis' ? '安全支持' : roleCopy[reply.role].name}</strong>
+                    <small>{reply.safetyMode === 'crisis' ? 'SAFETY FIRST' : roleCopy[reply.role].camp}</small>
+                  </div>
+                  {reply.content ? <p>{reply.content}</p> : null}
+                  {reply.status === 'error' ? (
+                    <div className="reply-error" role="alert">
+                      <span>{reply.error?.message || '这次回复中断了。'}</span>
+                      {reply.error?.retryable ? (
+                        <button type="button" onClick={() => onRetry(turn.id, reply.id)}>
+                          <RotateCcw /> 重试
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </article>
+              ) : null,
+            )}
+            {activeReply && !activeReply.content && turn.responses.some((reply) => reply.id === activeReply.id) ? (
+              <div className={`thinking-message thinking-message--${activeReply.role}`}>
+                <span /><span /><span /> {roleCopy[activeReply.role].name}正在整理观点
               </div>
             ) : null}
           </div>
@@ -336,16 +355,18 @@ function Composer({ disabled, onSummon, onNewTurn, onDecide }: { disabled: boole
 function ResultOverlay({ decision, onRestart }: { decision: Decision; onRestart: () => void }) {
   const winner: Role = decision.verdict === 'yes' ? 'angel' : 'devil';
   const loser: Role = winner === 'angel' ? 'devil' : 'angel';
-  const allReplies = decision.turns.flatMap((turn) => turn.responses);
+  const allReplies = decision.turns
+    .flatMap((turn) => turn.responses)
+    .filter((reply) => reply.status === 'complete');
   const angelCount = allReplies.filter((reply) => reply.role === 'angel').length;
   const devilCount = allReplies.filter((reply) => reply.role === 'devil').length;
 
   return (
-    <div className={`result-overlay result-overlay--${winner}`} role="dialog" aria-modal="true" aria-labelledby="result-title">
+    <dialog open className={`result-overlay result-overlay--${winner}`} aria-labelledby="result-title">
       <div className="result-rays" aria-hidden="true" />
       <div className="result-particles" aria-hidden="true">{Array.from({ length: 18 }, (_, i) => <i key={i} style={{ '--i': i } as React.CSSProperties} />)}</div>
-      <div className="result-loser"><CharacterFigure role={loser} state="defeat" compact /></div>
-      <div className="result-winner"><CharacterFigure role={winner} state="victory" /></div>
+      <div className="result-loser"><CharacterFigure side={loser} state="defeat" compact /></div>
+      <div className="result-winner"><CharacterFigure side={winner} state="victory" /></div>
       <section className="result-card">
         <span className="result-kicker">FINAL VERDICT · {decision.verdict?.toUpperCase()}</span>
         <h2 id="result-title">{roleCopy[winner].name}<em>赢得了这一局</em></h2>
@@ -357,81 +378,248 @@ function ResultOverlay({ decision, onRestart }: { decision: Decision; onRestart:
         </div>
         <Button onClick={onRestart} className="restart-button"><RotateCcw /> 开始新的决策</Button>
       </section>
-    </div>
+    </dialog>
   );
 }
 
 export default function Home() {
   const [decision, setDecision] = useState<Decision | null>(null);
   const [thinkingRole, setThinkingRole] = useState<Role | null>(null);
+  const [activeReplyId, setActiveReplyId] = useState<string | null>(null);
+  const [isReceiving, setIsReceiving] = useState(false);
   const [lastSpeaker, setLastSpeaker] = useState<Role | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const timerRef = useRef<number | null>(null);
+  const activeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
 
   useEffect(() => () => {
-    if (timerRef.current) window.clearTimeout(timerRef.current);
+    activeRequestRef.current?.controller.abort();
   }, []);
 
-  function queueReply(role: Role, turnId: string, message: string, roleReplyIndex: number, heardOther: boolean) {
+  function abortActiveRequest() {
+    const activeRequest = activeRequestRef.current;
+    activeRequestRef.current = null;
+    activeRequest?.controller.abort();
+  }
+
+  function updateReply(replyId: string, updater: (reply: Reply) => Reply) {
+    setDecision((current) => {
+      if (!current || current.verdict) return current;
+      return {
+        ...current,
+        turns: current.turns.map((turn) => ({
+          ...turn,
+          responses: turn.responses.map((reply) =>
+            reply.id === replyId ? updater(reply) : reply,
+          ),
+        })),
+      };
+    });
+  }
+
+  function markReplyFailed(replyId: string, message: string, retryable: boolean) {
+    updateReply(replyId, (reply) => ({
+      ...reply,
+      status: 'error',
+      error: { message, retryable },
+    }));
+  }
+
+  async function requestReply(
+    role: Role,
+    sourceDecision: Decision,
+    replyId: string,
+  ) {
+    abortActiveRequest();
+    const requestId = makeId('request');
+    const controller = new AbortController();
+    activeRequestRef.current = { id: requestId, controller };
     setThinkingRole(role);
-    setLastSpeaker(role);
-    timerRef.current = window.setTimeout(() => {
-      setDecision((current) => {
-        if (!current || current.verdict) return current;
-        return {
-          ...current,
-          turns: current.turns.map((turn) => turn.id === turnId
-            ? { ...turn, responses: [...turn.responses, { id: makeId('reply'), role, content: buildMockReply(role, message, roleReplyIndex, heardOther) }] }
-            : turn),
-        };
+    setActiveReplyId(replyId);
+    setIsReceiving(false);
+
+    const isCurrentRequest = () => activeRequestRef.current?.id === requestId;
+
+    try {
+      const response = await fetch('/api/agent', {
+        method: 'POST',
+        headers: {
+          Accept: 'text/event-stream',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          role,
+          decisionTitle: sourceDecision.title,
+          turns: sourceDecision.turns,
+        }),
+        signal: controller.signal,
       });
-      setThinkingRole(null);
-      timerRef.current = null;
-    }, 900);
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new AgentClientError(
+          payload?.error || '无法开始这次回复。',
+          response.status >= 500,
+        );
+      }
+      if (!response.body) throw new AgentClientError('服务器没有返回可读的内容。');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finished = false;
+
+      const handleEvent = (event: AgentStreamEvent) => {
+        if (!isCurrentRequest()) return;
+        if (event.type === 'meta') {
+          updateReply(replyId, (reply) => ({ ...reply, safetyMode: event.safetyMode }));
+        } else if (event.type === 'delta' && event.content) {
+          setIsReceiving(true);
+          updateReply(replyId, (reply) => ({
+            ...reply,
+            content: `${reply.content}${event.content}`,
+          }));
+        } else if (event.type === 'error') {
+          throw new AgentClientError(event.message, event.retryable);
+        } else if (event.type === 'done') {
+          finished = true;
+        }
+      };
+
+      while (isCurrentRequest()) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (!data) continue;
+          handleEvent(JSON.parse(data) as AgentStreamEvent);
+        }
+      }
+
+      if (!isCurrentRequest()) return;
+      if (!finished) throw new AgentClientError('连接在回复完成前中断了。');
+      updateReply(replyId, (reply) => ({ ...reply, status: 'complete', error: undefined }));
+      setLastSpeaker(role);
+    } catch (error) {
+      if (!isCurrentRequest() || controller.signal.aborted) return;
+      const clientError =
+        error instanceof AgentClientError
+          ? error
+          : new AgentClientError('这次回复中断了，可以保留当前对话后重试。');
+      markReplyFailed(replyId, clientError.message, clientError.retryable);
+    } finally {
+      if (isCurrentRequest()) {
+        activeRequestRef.current = null;
+        setThinkingRole(null);
+        setActiveReplyId(null);
+        setIsReceiving(false);
+      }
+    }
+  }
+
+  function appendReply(sourceDecision: Decision, turnId: string, role: Role) {
+    const replyId = makeId('reply');
+    const nextDecision: Decision = {
+      ...sourceDecision,
+      turns: sourceDecision.turns.map((turn) =>
+        turn.id === turnId
+          ? {
+              ...turn,
+              responses: [
+                ...turn.responses,
+                { id: replyId, role, content: '', status: 'streaming' },
+              ],
+            }
+          : turn,
+      ),
+    };
+    setDecision(nextDecision);
+    void requestReply(role, nextDecision, replyId);
   }
 
   function startDecision(question: string, role: Role) {
     const turnId = makeId('turn');
-    setDecision({ title: question, verdict: null, turns: [{ id: turnId, userMessage: question, responses: [] }] });
-    queueReply(role, turnId, question, 0, false);
+    const nextDecision: Decision = {
+      title: question,
+      verdict: null,
+      turns: [{ id: turnId, userMessage: question, responses: [] }],
+    };
+    appendReply(nextDecision, turnId, role);
   }
 
   function summon(role: Role) {
     if (!decision || thinkingRole || decision.verdict) return;
     const turn = decision.turns[decision.turns.length - 1];
-    const roleReplyIndex = turn.responses.filter((reply) => reply.role === role).length;
-    const heardOther = turn.responses.some((reply) => reply.role !== role);
-    queueReply(role, turn.id, turn.userMessage, roleReplyIndex, heardOther);
+    appendReply(decision, turn.id, role);
   }
 
   function addTurn(message: string, role: Role) {
     if (!decision || thinkingRole || decision.verdict) return;
     const turnId = makeId('turn');
-    setDecision({ ...decision, turns: [...decision.turns, { id: turnId, userMessage: message, responses: [] }] });
-    queueReply(role, turnId, message, 0, false);
+    const nextDecision: Decision = {
+      ...decision,
+      turns: [...decision.turns, { id: turnId, userMessage: message, responses: [] }],
+    };
+    appendReply(nextDecision, turnId, role);
+  }
+
+  function retryReply(turnId: string, replyId: string) {
+    if (!decision || thinkingRole || decision.verdict) return;
+    const turn = decision.turns.find((candidate) => candidate.id === turnId);
+    const reply = turn?.responses.find((candidate) => candidate.id === replyId);
+    if (!reply || reply.status !== 'error' || !reply.error?.retryable) return;
+
+    const nextDecision: Decision = {
+      ...decision,
+      turns: decision.turns.map((candidate) =>
+        candidate.id === turnId
+          ? {
+              ...candidate,
+              responses: candidate.responses.map((candidateReply) =>
+                candidateReply.id === replyId
+                  ? {
+                      ...candidateReply,
+                      content: '',
+                      status: 'streaming',
+                      error: undefined,
+                      safetyMode: undefined,
+                    }
+                  : candidateReply,
+              ),
+            }
+          : candidate,
+      ),
+    };
+    setDecision(nextDecision);
+    void requestReply(reply.role, nextDecision, replyId);
   }
 
   function settle(verdict: Verdict) {
     if (!decision) return;
-    if (timerRef.current) window.clearTimeout(timerRef.current);
-    timerRef.current = null;
+    abortActiveRequest();
     setThinkingRole(null);
-    setDecision({ ...decision, verdict });
+    setActiveReplyId(null);
+    setIsReceiving(false);
+    setDecision((current) => (current ? { ...current, verdict } : current));
     setDialogOpen(false);
   }
 
   function restart() {
-    if (timerRef.current) window.clearTimeout(timerRef.current);
-    timerRef.current = null;
+    abortActiveRequest();
     setDecision(null);
     setThinkingRole(null);
+    setActiveReplyId(null);
+    setIsReceiving(false);
     setLastSpeaker(null);
     setDialogOpen(false);
   }
 
   function characterState(role: Role): CharacterState {
     if (decision?.verdict) return (decision.verdict === 'yes' ? 'angel' : 'devil') === role ? 'victory' : 'defeat';
-    if (thinkingRole === role) return 'thinking';
+    if (thinkingRole === role) return isReceiving ? 'speaking' : 'thinking';
     if (thinkingRole && thinkingRole !== role) return 'listening';
     if (lastSpeaker === role) return 'speaking';
     if (lastSpeaker && lastSpeaker !== role) return 'listening';
@@ -444,12 +632,12 @@ export default function Home() {
     <main className="stage-shell" id="main">
       <AppHeader title={decision.title} turnCount={decision.turns.length} onDecide={() => setDialogOpen(true)} />
       <div className="duel-stage">
-        <CharacterPanel role="angel" state={characterState('angel')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('angel')} />
+        <CharacterPanel side="angel" state={characterState('angel')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('angel')} />
         <section className="conversation-panel" aria-label="共享对话">
-          <Conversation turns={decision.turns} thinkingRole={thinkingRole} />
+          <Conversation turns={decision.turns} activeReplyId={activeReplyId} onRetry={retryReply} />
           <Composer disabled={Boolean(thinkingRole || decision.verdict)} onSummon={summon} onNewTurn={addTurn} onDecide={() => setDialogOpen(true)} />
         </section>
-        <CharacterPanel role="devil" state={characterState('devil')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('devil')} />
+        <CharacterPanel side="devil" state={characterState('devil')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('devil')} />
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
