@@ -4,13 +4,16 @@ import { useEffect, useRef, useState, type SubmitEvent } from 'react';
 import {
   ArrowRight,
   ChevronRight,
+  Clock3,
   Feather,
   Flame,
   Gavel,
+  History as HistoryIcon,
   MessageCircleMore,
   RotateCcw,
   Sparkles,
   Swords,
+  Trophy,
   X,
 } from 'lucide-react';
 
@@ -24,6 +27,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  loadDecisionHistory,
+  saveDecisionHistory,
+  summarizeDecisionHistory,
+  upsertDecisionHistory,
+} from '@/lib/history.mjs';
 
 type Role = 'angel' | 'devil';
 type CharacterState = 'idle' | 'thinking' | 'speaking' | 'listening' | 'victory' | 'defeat';
@@ -35,6 +44,7 @@ type Reply = {
   role: Role;
   content: string;
   status: ReplyStatus;
+  createdAt: string;
   error?: {
     message: string;
     retryable: boolean;
@@ -45,13 +55,20 @@ type Reply = {
 type Turn = {
   id: string;
   userMessage: string;
+  createdAt: string;
   responses: Reply[];
 };
 
 type Decision = {
+  id: string;
   title: string;
   turns: Turn[];
+  status: 'active' | 'decided';
   verdict: Verdict | null;
+  winner: Role | null;
+  createdAt: string;
+  updatedAt: string;
+  decidedAt: string | null;
 };
 
 type AgentStreamEvent =
@@ -107,6 +124,19 @@ function makeId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function now() {
+  return new Date().toISOString();
+}
+
+function formatHistoryDate(value: string) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
+}
+
 function CharacterFigure({ side, state, compact = false }: { side: Role; state: CharacterState; compact?: boolean }) {
   const copy = roleCopy[side];
 
@@ -125,7 +155,15 @@ function CharacterFigure({ side, state, compact = false }: { side: Role; state: 
   );
 }
 
-function StartScreen({ onStart }: { onStart: (question: string, role: Role) => void }) {
+function StartScreen({
+  historyCount,
+  onHistory,
+  onStart,
+}: {
+  historyCount: number;
+  onHistory: () => void;
+  onStart: (question: string, role: Role) => void;
+}) {
   const [firstSpeaker, setFirstSpeaker] = useState<Role>('angel');
   const [question, setQuestion] = useState('');
   const [showError, setShowError] = useState(false);
@@ -143,7 +181,7 @@ function StartScreen({ onStart }: { onStart: (question: string, role: Role) => v
     <main className="start-shell">
       <div className="ambient ambient--gold" aria-hidden="true" />
       <div className="ambient ambient--red" aria-hidden="true" />
-      <AppHeader room="01" />
+      <AppHeader room="01" historyCount={historyCount} onHistory={onHistory} />
 
       <section className="opening-stage" aria-labelledby="opening-title">
         <div className="intro-character intro-character--angel">
@@ -197,7 +235,21 @@ function StartScreen({ onStart }: { onStart: (question: string, role: Role) => v
   );
 }
 
-function AppHeader({ room = '01', title, turnCount, onDecide }: { room?: string; title?: string; turnCount?: number; onDecide?: () => void }) {
+function AppHeader({
+  room = '01',
+  title,
+  turnCount,
+  historyCount = 0,
+  onDecide,
+  onHistory,
+}: {
+  room?: string;
+  title?: string;
+  turnCount?: number;
+  historyCount?: number;
+  onDecide?: () => void;
+  onHistory?: () => void;
+}) {
   return (
     <header className="site-header">
       <a href="#main" className="brand" aria-label="Angel & Devil">
@@ -212,6 +264,11 @@ function AppHeader({ room = '01', title, turnCount, onDecide }: { room?: string;
       ) : null}
       <div className="header-actions">
         {turnCount ? <span className="turn-count">TURN {String(turnCount).padStart(2, '0')}</span> : null}
+        {onHistory ? (
+          <Button onClick={onHistory} className="history-button" variant="ghost">
+            <HistoryIcon /> 历史{historyCount ? <span>{historyCount}</span> : null}
+          </Button>
+        ) : null}
         {onDecide ? <Button onClick={onDecide} className="decide-button"><Gavel /> 作出决定</Button> : null}
         {!title ? <div className="round-badge"><span>DECISION ROOM</span><strong>{room}</strong></div> : null}
       </div>
@@ -382,14 +439,134 @@ function ResultOverlay({ decision, onRestart }: { decision: Decision; onRestart:
   );
 }
 
+function HistoryDialog({
+  decisions,
+  open,
+  onOpenChange,
+  onOpenDecision,
+}: {
+  decisions: Decision[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onOpenDecision: (decision: Decision) => void;
+}) {
+  const stats = summarizeDecisionHistory(decisions);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="history-dialog">
+        <DialogHeader>
+          <span className="dialog-kicker"><HistoryIcon /> DECISION ARCHIVE</span>
+          <DialogTitle>你的决策记录</DialogTitle>
+          <DialogDescription>每次对话和最终选择都保存在这台设备上。</DialogDescription>
+        </DialogHeader>
+
+        <section className="career-stats" aria-label="胜负统计">
+          <div className="career-stat career-stat--total">
+            <HistoryIcon />
+            <span>总决策<small>{stats.active ? `${stats.active} 局进行中` : '全部已结算'}</small></span>
+            <strong>{stats.total}</strong>
+          </div>
+          <div className="career-stat career-stat--angel">
+            <Feather />
+            <span>天使胜场<small>{stats.decided ? `胜率 ${stats.angelWinRate}%` : '尚无战绩'}</small></span>
+            <strong>{stats.angelWins}</strong>
+          </div>
+          <div className="career-stat career-stat--devil">
+            <Flame />
+            <span>恶魔胜场<small>{stats.decided ? `胜率 ${stats.devilWinRate}%` : '尚无战绩'}</small></span>
+            <strong>{stats.devilWins}</strong>
+          </div>
+        </section>
+
+        <div className="history-section-heading">
+          <span><Clock3 /> 历史会话</span>
+          <small>{stats.decided} 局已结算</small>
+        </div>
+
+        <div className="history-list">
+          {decisions.length ? (
+            decisions.map((item) => {
+              const replyCount = item.turns
+                .flatMap((turn) => turn.responses)
+                .filter((reply) => reply.status === 'complete').length;
+              const winner = item.verdict === 'yes' ? 'angel' : item.verdict === 'no' ? 'devil' : null;
+
+              return (
+                <button
+                  type="button"
+                  className={`history-item${winner ? ` history-item--${winner}` : ''}`}
+                  key={item.id}
+                  onClick={() => onOpenDecision(item)}
+                >
+                  <span className="history-item-icon">
+                    {winner === 'angel' ? <Feather /> : winner === 'devil' ? <Flame /> : <Clock3 />}
+                  </span>
+                  <span className="history-item-copy">
+                    <strong>{item.title}</strong>
+                    <small>{formatHistoryDate(item.updatedAt)} · {item.turns.length} Turns · {replyCount} 条回复</small>
+                  </span>
+                  <span className={`history-status${winner ? ` history-status--${winner}` : ''}`}>
+                    {winner ? <Trophy /> : null}
+                    {winner === 'angel' ? 'YES' : winner === 'devil' ? 'NO' : '进行中'}
+                  </span>
+                  <ChevronRight />
+                </button>
+              );
+            })
+          ) : (
+            <div className="history-empty">
+              <HistoryIcon />
+              <strong>还没有决策记录</strong>
+              <span>开启第一局后，对话会自动出现在这里。</span>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function Home() {
   const [decision, setDecision] = useState<Decision | null>(null);
+  const [history, setHistory] = useState<Decision[]>([]);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [storageError, setStorageError] = useState(false);
   const [thinkingRole, setThinkingRole] = useState<Role | null>(null);
   const [activeReplyId, setActiveReplyId] = useState<string | null>(null);
   const [isReceiving, setIsReceiving] = useState(false);
   const [lastSpeaker, setLastSpeaker] = useState<Role | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const activeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
+
+  useEffect(() => {
+    const snapshot = loadDecisionHistory(window.localStorage);
+    const restoredDecision = snapshot.decisions.find(
+      (item: Decision) => item.id === snapshot.currentDecisionId,
+    ) as Decision | undefined;
+    queueMicrotask(() => {
+      setHistory(snapshot.decisions as Decision[]);
+      setDecision(restoredDecision || null);
+      setIsHydrated(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    if (decision && history.find((item) => item.id === decision.id) !== decision) {
+      queueMicrotask(() => {
+        setHistory((current) => upsertDecisionHistory(current, decision) as Decision[]);
+      });
+      return;
+    }
+
+    const saved = saveDecisionHistory(window.localStorage, {
+      decisions: history,
+      currentDecisionId: decision && !decision.verdict ? decision.id : null,
+    });
+    queueMicrotask(() => setStorageError(!saved));
+  }, [decision, history, isHydrated]);
 
   useEffect(() => () => {
     activeRequestRef.current?.controller.abort();
@@ -406,6 +583,7 @@ export default function Home() {
       if (!current || current.verdict) return current;
       return {
         ...current,
+        updatedAt: now(),
         turns: current.turns.map((turn) => ({
           ...turn,
           responses: turn.responses.map((reply) =>
@@ -522,15 +700,17 @@ export default function Home() {
 
   function appendReply(sourceDecision: Decision, turnId: string, role: Role) {
     const replyId = makeId('reply');
+    const createdAt = now();
     const nextDecision: Decision = {
       ...sourceDecision,
+      updatedAt: createdAt,
       turns: sourceDecision.turns.map((turn) =>
         turn.id === turnId
           ? {
               ...turn,
               responses: [
                 ...turn.responses,
-                { id: replyId, role, content: '', status: 'streaming' },
+                { id: replyId, role, content: '', status: 'streaming', createdAt },
               ],
             }
           : turn,
@@ -542,10 +722,17 @@ export default function Home() {
 
   function startDecision(question: string, role: Role) {
     const turnId = makeId('turn');
+    const createdAt = now();
     const nextDecision: Decision = {
+      id: makeId('decision'),
       title: question,
+      status: 'active',
       verdict: null,
-      turns: [{ id: turnId, userMessage: question, responses: [] }],
+      winner: null,
+      createdAt,
+      updatedAt: createdAt,
+      decidedAt: null,
+      turns: [{ id: turnId, userMessage: question, responses: [], createdAt }],
     };
     appendReply(nextDecision, turnId, role);
   }
@@ -559,9 +746,11 @@ export default function Home() {
   function addTurn(message: string, role: Role) {
     if (!decision || thinkingRole || decision.verdict) return;
     const turnId = makeId('turn');
+    const createdAt = now();
     const nextDecision: Decision = {
       ...decision,
-      turns: [...decision.turns, { id: turnId, userMessage: message, responses: [] }],
+      updatedAt: createdAt,
+      turns: [...decision.turns, { id: turnId, userMessage: message, responses: [], createdAt }],
     };
     appendReply(nextDecision, turnId, role);
   }
@@ -574,6 +763,7 @@ export default function Home() {
 
     const nextDecision: Decision = {
       ...decision,
+      updatedAt: now(),
       turns: decision.turns.map((candidate) =>
         candidate.id === turnId
           ? {
@@ -603,7 +793,15 @@ export default function Home() {
     setThinkingRole(null);
     setActiveReplyId(null);
     setIsReceiving(false);
-    setDecision((current) => (current ? { ...current, verdict } : current));
+    const decidedAt = now();
+    setDecision((current) => (current ? {
+      ...current,
+      status: 'decided',
+      verdict,
+      winner: verdict === 'yes' ? 'angel' : 'devil',
+      decidedAt,
+      updatedAt: decidedAt,
+    } : current));
     setDialogOpen(false);
   }
 
@@ -617,6 +815,21 @@ export default function Home() {
     setDialogOpen(false);
   }
 
+  function openHistoryDecision(nextDecision: Decision) {
+    abortActiveRequest();
+    const lastReply = nextDecision.turns
+      .flatMap((turn) => turn.responses)
+      .filter((reply) => reply.status === 'complete')
+      .at(-1);
+    setDecision(nextDecision);
+    setThinkingRole(null);
+    setActiveReplyId(null);
+    setIsReceiving(false);
+    setLastSpeaker(lastReply?.role || null);
+    setDialogOpen(false);
+    setHistoryOpen(false);
+  }
+
   function characterState(role: Role): CharacterState {
     if (decision?.verdict) return (decision.verdict === 'yes' ? 'angel' : 'devil') === role ? 'victory' : 'defeat';
     if (thinkingRole === role) return isReceiving ? 'speaking' : 'thinking';
@@ -626,36 +839,82 @@ export default function Home() {
     return 'idle';
   }
 
-  if (!decision) return <StartScreen onStart={startDecision} />;
+  if (!isHydrated) {
+    return (
+      <StartScreen
+        historyCount={0}
+        onHistory={() => setHistoryOpen(true)}
+        onStart={startDecision}
+      />
+    );
+  }
+
+  const historyDialog = (
+    <HistoryDialog
+      decisions={history}
+      open={historyOpen}
+      onOpenChange={setHistoryOpen}
+      onOpenDecision={openHistoryDecision}
+    />
+  );
+  const storageWarning = storageError ? (
+    <output className="storage-warning">
+      浏览器暂时无法保存记录，本次对话仍可继续。
+    </output>
+  ) : null;
+
+  if (!decision) {
+    return (
+      <>
+        <StartScreen
+          historyCount={history.length}
+          onHistory={() => setHistoryOpen(true)}
+          onStart={startDecision}
+        />
+        {historyDialog}
+        {storageWarning}
+      </>
+    );
+  }
 
   return (
-    <main className="stage-shell" id="main">
-      <AppHeader title={decision.title} turnCount={decision.turns.length} onDecide={() => setDialogOpen(true)} />
-      <div className="duel-stage">
-        <CharacterPanel side="angel" state={characterState('angel')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('angel')} />
-        <section className="conversation-panel" aria-label="共享对话">
-          <Conversation turns={decision.turns} activeReplyId={activeReplyId} onRetry={retryReply} />
-          <Composer disabled={Boolean(thinkingRole || decision.verdict)} onSummon={summon} onNewTurn={addTurn} onDecide={() => setDialogOpen(true)} />
-        </section>
-        <CharacterPanel side="devil" state={characterState('devil')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('devil')} />
-      </div>
+    <>
+      <main className="stage-shell" id="main">
+        <AppHeader
+          title={decision.title}
+          turnCount={decision.turns.length}
+          historyCount={history.length}
+          onHistory={() => setHistoryOpen(true)}
+          onDecide={() => setDialogOpen(true)}
+        />
+        <div className="duel-stage">
+          <CharacterPanel side="angel" state={characterState('angel')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('angel')} />
+          <section className="conversation-panel" aria-label="共享对话">
+            <Conversation turns={decision.turns} activeReplyId={activeReplyId} onRetry={retryReply} />
+            <Composer disabled={Boolean(thinkingRole || decision.verdict)} onSummon={summon} onNewTurn={addTurn} onDecide={() => setDialogOpen(true)} />
+          </section>
+          <CharacterPanel side="devil" state={characterState('devil')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('devil')} />
+        </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="verdict-dialog" showCloseButton={false}>
-          <DialogHeader>
-            <span className="dialog-kicker"><Gavel /> FINAL VERDICT</span>
-            <DialogTitle>这一局，你决定怎么做？</DialogTitle>
-            <DialogDescription>角色已经说完自己的立场。最终选择只属于你。</DialogDescription>
-          </DialogHeader>
-          <div className="verdict-options">
-            <button className="verdict-yes" onClick={() => settle('yes')}><Feather /><span><small>YES · 天使获胜</small>我决定去做</span><ChevronRight /></button>
-            <button className="verdict-no" onClick={() => settle('no')}><Flame /><span><small>NO · 恶魔获胜</small>我决定不做</span><ChevronRight /></button>
-          </div>
-          <DialogClose className="continue-button"><X /> 我还想再听听</DialogClose>
-        </DialogContent>
-      </Dialog>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="verdict-dialog" showCloseButton={false}>
+            <DialogHeader>
+              <span className="dialog-kicker"><Gavel /> FINAL VERDICT</span>
+              <DialogTitle>这一局，你决定怎么做？</DialogTitle>
+              <DialogDescription>角色已经说完自己的立场。最终选择只属于你。</DialogDescription>
+            </DialogHeader>
+            <div className="verdict-options">
+              <button className="verdict-yes" onClick={() => settle('yes')}><Feather /><span><small>YES · 天使获胜</small>我决定去做</span><ChevronRight /></button>
+              <button className="verdict-no" onClick={() => settle('no')}><Flame /><span><small>NO · 恶魔获胜</small>我决定不做</span><ChevronRight /></button>
+            </div>
+            <DialogClose className="continue-button"><X /> 我还想再听听</DialogClose>
+          </DialogContent>
+        </Dialog>
 
-      {decision.verdict ? <ResultOverlay decision={decision} onRestart={restart} /> : null}
-    </main>
+        {decision.verdict ? <ResultOverlay decision={decision} onRestart={restart} /> : null}
+      </main>
+      {historyDialog}
+      {storageWarning}
+    </>
   );
 }
