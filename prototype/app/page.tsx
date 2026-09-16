@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState, type SubmitEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  ArrowRight,
   ChevronRight,
   Clock3,
   Feather,
@@ -33,6 +32,7 @@ import {
   summarizeDecisionHistory,
   upsertDecisionHistory,
 } from '@/lib/history.mjs';
+import { resolveCharacterState } from '@/lib/character-state.mjs';
 
 type Role = 'angel' | 'devil';
 type CharacterState = 'idle' | 'thinking' | 'speaking' | 'listening' | 'victory' | 'defeat';
@@ -97,9 +97,9 @@ const poseIndex: Record<CharacterState, number> = {
 };
 
 const stateLabel: Record<CharacterState, string> = {
-  idle: '等待召唤',
+  idle: '漂浮待命',
   thinking: '正在思考',
-  speaking: '刚刚发言',
+  speaking: '正在发言',
   listening: '正在倾听',
   victory: '赢得本局',
   defeat: '接受结果',
@@ -149,7 +149,7 @@ function CharacterFigure({ side, state, compact = false }: { side: Role; state: 
       <div className="character-rings" aria-hidden="true"><i /><i /><i /></div>
       <div className="character-sprite">
         {/* oxlint-disable-next-line next/no-img-element -- sprite sheets rely on exact CSS cropping. */}
-        <img src={`/characters/${side}-states.png`} alt={`${copy.name} · ${stateLabel[state]}`} />
+        <img src={`/characters/${side}-states-flying.png`} alt={`${copy.name} · ${stateLabel[state]}`} />
       </div>
     </div>
   );
@@ -164,38 +164,39 @@ function StartScreen({
   onHistory: () => void;
   onStart: (question: string, role: Role) => void;
 }) {
-  const [firstSpeaker, setFirstSpeaker] = useState<Role>('angel');
   const [question, setQuestion] = useState('');
   const [showError, setShowError] = useState(false);
 
-  function submit(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function submitTo(role: Role) {
     if (!question.trim()) {
       setShowError(true);
       return;
     }
-    onStart(question.trim(), firstSpeaker);
+    onStart(question.trim(), role);
   }
 
   return (
     <main className="start-shell">
-      <div className="ambient ambient--gold" aria-hidden="true" />
-      <div className="ambient ambient--red" aria-hidden="true" />
       <AppHeader room="01" historyCount={historyCount} onHistory={onHistory} />
 
-      <section className="opening-stage" aria-labelledby="opening-title">
+      <section className="opening-stage" aria-label="决策舞台">
+        <h1 className="sr-only">Angel & Devil 决策舞台</h1>
         <div className="intro-character intro-character--angel">
           <CharacterFigure side="angel" state="idle" />
           <CharacterCaption side="angel" />
         </div>
 
-        <div className="opening-copy" id="decision">
-          <div className="eyebrow"><Sparkles size={13} /> 一场只由你裁决的辩论</div>
-          <h1 id="opening-title">让两个声音，<br /><em>把犹豫说清楚。</em></h1>
-          <p className="opening-lead">天使替 Yes 辩护，恶魔替 No 发问。<br />他们负责说服，你负责决定。</p>
+        <div className="intro-character intro-character--devil">
+          <CharacterFigure side="devil" state="idle" />
+          <CharacterCaption side="devil" />
+        </div>
 
-          <form className="decision-card" onSubmit={submit}>
-            <label htmlFor="decision-question">你现在在纠结什么？</label>
+        <div className="opening-dock" id="decision">
+          <div className="opening-dock__meta">
+            <label htmlFor="decision-question"><Sparkles /> 写下你正在犹豫的事</label>
+            <span>选一个角色，先听他的看法</span>
+          </div>
+          <div className="opening-dock__controls">
             <Textarea
               id="decision-question"
               value={question}
@@ -204,31 +205,14 @@ function StartScreen({
                 if (showError) setShowError(false);
               }}
               placeholder="例如：要不要接受一个很有挑战的新项目？"
-              rows={3}
+              rows={1}
               aria-invalid={showError}
+              aria-describedby={showError ? 'decision-question-error' : undefined}
             />
-            {showError && <p className="field-error">先写下你的问题，舞台才能开场。</p>}
-
-            <fieldset>
-              <legend>你想先听谁说？</legend>
-              <div className="speaker-choice">
-                <button type="button" className={`${firstSpeaker === 'angel' ? 'is-selected ' : ''}angel-choice`} onClick={() => setFirstSpeaker('angel')} aria-pressed={firstSpeaker === 'angel'}>
-                  <Feather /> <span><small>YES</small>先听天使</span>
-                </button>
-                <button type="button" className={`${firstSpeaker === 'devil' ? 'is-selected ' : ''}devil-choice`} onClick={() => setFirstSpeaker('devil')} aria-pressed={firstSpeaker === 'devil'}>
-                  <Flame /> <span><small>NO</small>先听恶魔</span>
-                </button>
-              </div>
-            </fieldset>
-
-            <Button type="submit" className="enter-stage" size="lg">开启决策舞台 <ArrowRight /></Button>
-          </form>
-          <p className="privacy-note"><span /> 你的选择不会由任何角色替你作出</p>
-        </div>
-
-        <div className="intro-character intro-character--devil">
-          <CharacterFigure side="devil" state="idle" />
-          <CharacterCaption side="devil" />
+            <Button type="button" className="dock-role dock-role--angel" onClick={() => submitTo('angel')}><Feather /> 对话天使</Button>
+            <Button type="button" className="dock-role dock-role--devil" onClick={() => submitTo('devil')}><Flame /> 对话恶魔</Button>
+          </div>
+          {showError ? <p className="opening-dock__error" id="decision-question-error" role="alert">先写下你要决定的事。</p> : null}
         </div>
       </section>
     </main>
@@ -287,15 +271,51 @@ function CharacterCaption({ side }: { side: Role }) {
   );
 }
 
-function CharacterPanel({ side, state, disabled, onSummon }: { side: Role; state: CharacterState; disabled: boolean; onSummon: () => void }) {
+function CharacterPanel({
+  side,
+  state,
+  reply,
+  turnId,
+  isThinking,
+  onRetry,
+}: {
+  side: Role;
+  state: CharacterState;
+  reply: Reply | null;
+  turnId: string | null;
+  isThinking: boolean;
+  onRetry: (turnId: string, replyId: string) => void;
+}) {
   const copy = roleCopy[side];
+  const bubbleRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (reply?.status === 'streaming') bubbleRef.current?.scrollTo({ top: bubbleRef.current.scrollHeight });
+  }, [reply?.content, reply?.status]);
+
   return (
-    <button className={`character-panel character-panel--${side} is-${state}`} onClick={onSummon} disabled={disabled} aria-label={`${copy.summon}，当前${stateLabel[state]}`}>
+    <section className={`character-panel character-panel--${side} is-${state}`} aria-label={`${copy.name}，当前${stateLabel[state]}`}>
       <span className="panel-state"><i /> {stateLabel[state]}</span>
       <CharacterFigure side={side} state={state} />
       <CharacterCaption side={side} />
-      <span className="summon-hint"><MessageCircleMore /> 点击角色 · {copy.summon}</span>
-    </button>
+      <div className={`speech-bubble speech-bubble--${side}${reply?.status === 'streaming' ? ' is-streaming' : ''}`} aria-live="polite">
+        <div className="speech-bubble__content" ref={bubbleRef}>
+          <div className="speech-bubble__head">
+            <span>{side === 'angel' ? <Feather /> : <Flame />}{reply?.safetyMode === 'crisis' ? '安全支持' : copy.name}</span>
+            <small>{copy.camp}</small>
+          </div>
+          {reply?.content ? <p>{reply.content}</p> : isThinking ? (
+            <div className="speech-bubble__thinking"><i /><i /><i /> 正在整理想法…</div>
+          ) : <p className="speech-bubble__placeholder">还没轮到我发言。想听我的看法，就点下方按钮。</p>}
+          {reply?.status === 'error' ? (
+            <div className="speech-bubble__error" role="alert">
+              <span>{reply.error?.message || '这次回复中断了。'}</span>
+              {reply.error?.retryable && turnId ? <button type="button" onClick={() => onRetry(turnId, reply.id)}><RotateCcw /> 重试</button> : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -368,42 +388,38 @@ function Conversation({
   );
 }
 
-function Composer({ disabled, onSummon, onNewTurn, onDecide }: { disabled: boolean; onSummon: (role: Role) => void; onNewTurn: (message: string, role: Role) => void; onDecide: () => void }) {
+function Composer({ disabled, onSummon, onNewTurn, onHistory, onDecide }: { disabled: boolean; onSummon: (role: Role) => void; onNewTurn: (message: string, role: Role) => void; onHistory: () => void; onDecide: () => void }) {
   const [draft, setDraft] = useState('');
-  const [error, setError] = useState(false);
 
   function submitTo(role: Role) {
-    if (!draft.trim()) {
-      setError(true);
-      return;
+    if (draft.trim()) {
+      onNewTurn(draft.trim(), role);
+      setDraft('');
+    } else {
+      onSummon(role);
     }
-    onNewTurn(draft.trim(), role);
-    setDraft('');
-    setError(false);
   }
 
   return (
-    <div className="composer">
-      <div className="current-turn-actions">
-        <span>继续当前 Turn</span>
-        <button onClick={() => onSummon('angel')} disabled={disabled}><Feather /> 再听天使</button>
-        <button onClick={() => onSummon('devil')} disabled={disabled}><Flame /> 再听恶魔</button>
+    <div className="dialogue-dock">
+      <div className="dialogue-dock__meta">
+        <span><Sparkles /> 你想听谁说？<small>{draft.trim() ? '这句补充会开启新的一轮' : '不输入也可以直接继续对话'}</small></span>
+        <div>
+          <button type="button" onClick={onHistory}><MessageCircleMore /> 对话记录</button>
+          <button type="button" onClick={onDecide} className="dock-decide"><Gavel /> 作出决定</button>
+        </div>
       </div>
-      <div className="new-turn-box">
+      <div className="dialogue-dock__controls">
         <Textarea
           value={draft}
-          onChange={(event) => { setDraft(event.target.value); if (error) setError(false); }}
-          placeholder="补充新信息，开启下一个 Turn…"
-          aria-label="补充新信息"
-          aria-invalid={error}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="补充一句（可选）…"
+          aria-label="补充信息，可选"
           disabled={disabled}
+          rows={1}
         />
-        <div className="send-options">
-          {error ? <span className="composer-error">先写下你要补充的内容</span> : <span>发送给</span>}
-          <Button onClick={() => submitTo('angel')} disabled={disabled} variant="ghost"><Feather /> 天使</Button>
-          <Button onClick={() => submitTo('devil')} disabled={disabled} variant="ghost"><Flame /> 恶魔</Button>
-          <Button onClick={onDecide} className="mobile-decide"><Gavel /> 作出决定</Button>
-        </div>
+        <Button onClick={() => submitTo('angel')} disabled={disabled} className="dock-role dock-role--angel"><Feather /> 对话天使</Button>
+        <Button onClick={() => submitTo('devil')} disabled={disabled} className="dock-role dock-role--devil"><Flame /> 对话恶魔</Button>
       </div>
     </div>
   );
@@ -538,7 +554,9 @@ export default function Home() {
   const [isReceiving, setIsReceiving] = useState(false);
   const [lastSpeaker, setLastSpeaker] = useState<Role | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const activeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
+  const speakerHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const snapshot = loadDecisionHistory(window.localStorage);
@@ -570,7 +588,23 @@ export default function Home() {
 
   useEffect(() => () => {
     activeRequestRef.current?.controller.abort();
+    if (speakerHoldTimerRef.current) clearTimeout(speakerHoldTimerRef.current);
   }, []);
+
+  function clearSpeakerHold() {
+    if (speakerHoldTimerRef.current) clearTimeout(speakerHoldTimerRef.current);
+    speakerHoldTimerRef.current = null;
+    setLastSpeaker(null);
+  }
+
+  function holdLastSpeaker(role: Role) {
+    if (speakerHoldTimerRef.current) clearTimeout(speakerHoldTimerRef.current);
+    setLastSpeaker(role);
+    speakerHoldTimerRef.current = setTimeout(() => {
+      setLastSpeaker((current) => (current === role ? null : current));
+      speakerHoldTimerRef.current = null;
+    }, 1400);
+  }
 
   function abortActiveRequest() {
     const activeRequest = activeRequestRef.current;
@@ -611,6 +645,7 @@ export default function Home() {
     const requestId = makeId('request');
     const controller = new AbortController();
     activeRequestRef.current = { id: requestId, controller };
+    clearSpeakerHold();
     setThinkingRole(role);
     setActiveReplyId(replyId);
     setIsReceiving(false);
@@ -680,7 +715,7 @@ export default function Home() {
       if (!isCurrentRequest()) return;
       if (!finished) throw new AgentClientError('连接在回复完成前中断了。');
       updateReply(replyId, (reply) => ({ ...reply, status: 'complete', error: undefined }));
-      setLastSpeaker(role);
+      holdLastSpeaker(role);
     } catch (error) {
       if (!isCurrentRequest() || controller.signal.aborted) return;
       const clientError =
@@ -790,6 +825,7 @@ export default function Home() {
   function settle(verdict: Verdict) {
     if (!decision) return;
     abortActiveRequest();
+    clearSpeakerHold();
     setThinkingRole(null);
     setActiveReplyId(null);
     setIsReceiving(false);
@@ -803,40 +839,40 @@ export default function Home() {
       updatedAt: decidedAt,
     } : current));
     setDialogOpen(false);
+    setTranscriptOpen(false);
   }
 
   function restart() {
     abortActiveRequest();
+    clearSpeakerHold();
     setDecision(null);
     setThinkingRole(null);
     setActiveReplyId(null);
     setIsReceiving(false);
-    setLastSpeaker(null);
     setDialogOpen(false);
+    setTranscriptOpen(false);
   }
 
   function openHistoryDecision(nextDecision: Decision) {
     abortActiveRequest();
-    const lastReply = nextDecision.turns
-      .flatMap((turn) => turn.responses)
-      .filter((reply) => reply.status === 'complete')
-      .at(-1);
+    clearSpeakerHold();
     setDecision(nextDecision);
     setThinkingRole(null);
     setActiveReplyId(null);
     setIsReceiving(false);
-    setLastSpeaker(lastReply?.role || null);
     setDialogOpen(false);
+    setTranscriptOpen(false);
     setHistoryOpen(false);
   }
 
   function characterState(role: Role): CharacterState {
-    if (decision?.verdict) return (decision.verdict === 'yes' ? 'angel' : 'devil') === role ? 'victory' : 'defeat';
-    if (thinkingRole === role) return isReceiving ? 'speaking' : 'thinking';
-    if (thinkingRole && thinkingRole !== role) return 'listening';
-    if (lastSpeaker === role) return 'speaking';
-    if (lastSpeaker && lastSpeaker !== role) return 'listening';
-    return 'idle';
+    return resolveCharacterState({
+      role,
+      verdict: decision?.verdict || null,
+      activeRole: thinkingRole,
+      isReceiving,
+      lastSpeaker,
+    }) as CharacterState;
   }
 
   if (!isHydrated) {
@@ -877,6 +913,21 @@ export default function Home() {
     );
   }
 
+  function latestReply(role: Role): { reply: Reply; turnId: string } | null {
+    if (!decision) return null;
+    for (let turnIndex = decision.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+      const turn = decision.turns[turnIndex];
+      for (let replyIndex = turn.responses.length - 1; replyIndex >= 0; replyIndex -= 1) {
+        const reply = turn.responses[replyIndex];
+        if (reply.role === role) return { reply, turnId: turn.id };
+      }
+    }
+    return null;
+  }
+
+  const angelReply = latestReply('angel');
+  const devilReply = latestReply('devil');
+
   return (
     <>
       <main className="stage-shell" id="main">
@@ -888,13 +939,21 @@ export default function Home() {
           onDecide={() => setDialogOpen(true)}
         />
         <div className="duel-stage">
-          <CharacterPanel side="angel" state={characterState('angel')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('angel')} />
-          <section className="conversation-panel" aria-label="共享对话">
-            <Conversation turns={decision.turns} activeReplyId={activeReplyId} onRetry={retryReply} />
-            <Composer disabled={Boolean(thinkingRole || decision.verdict)} onSummon={summon} onNewTurn={addTurn} onDecide={() => setDialogOpen(true)} />
-          </section>
-          <CharacterPanel side="devil" state={characterState('devil')} disabled={Boolean(thinkingRole || decision.verdict)} onSummon={() => summon('devil')} />
+          <CharacterPanel side="angel" state={characterState('angel')} reply={angelReply?.reply || null} turnId={angelReply?.turnId || null} isThinking={thinkingRole === 'angel'} onRetry={retryReply} />
+          <CharacterPanel side="devil" state={characterState('devil')} reply={devilReply?.reply || null} turnId={devilReply?.turnId || null} isThinking={thinkingRole === 'devil'} onRetry={retryReply} />
+          <Composer disabled={Boolean(thinkingRole || decision.verdict)} onSummon={summon} onNewTurn={addTurn} onHistory={() => setTranscriptOpen(true)} onDecide={() => setDialogOpen(true)} />
         </div>
+
+        <Dialog open={transcriptOpen} onOpenChange={setTranscriptOpen}>
+          <DialogContent className="transcript-dialog">
+            <DialogHeader>
+              <span className="dialog-kicker"><MessageCircleMore /> CONVERSATION</span>
+              <DialogTitle>完整对话</DialogTitle>
+              <DialogDescription>这里保留每一轮提问和双方的全部回复。</DialogDescription>
+            </DialogHeader>
+            <Conversation turns={decision.turns} activeReplyId={activeReplyId} onRetry={retryReply} />
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogContent className="verdict-dialog" showCloseButton={false}>

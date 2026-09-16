@@ -33,6 +33,31 @@ test('parseAgentRequest validates and preserves the shared conversation', () => 
   assert.equal(request.turns[0].responses[0].content, '先别忽略你的精力成本。');
 });
 
+test('parseAgentRequest accepts the empty in-flight reply placeholder', () => {
+  const request = parseAgentRequest({
+    ...validPayload,
+    turns: [
+      {
+        userMessage: '这一轮请天使先说。',
+        responses: [
+          {
+            role: 'angel',
+            content: '',
+            status: 'streaming',
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(request.turns[0].responses[0].status, 'streaming');
+  assert.equal(request.turns[0].responses[0].content, '');
+  assert.doesNotMatch(
+    buildAgentMessages(request, 'standard')[1].content,
+    /"speaker": "天使 \/ YES"/,
+  );
+});
+
 test('parseAgentRequest rejects invalid roles and oversized user messages', () => {
   assert.throws(
     () => parseAgentRequest({ ...validPayload, role: 'judge' }),

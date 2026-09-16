@@ -91,15 +91,25 @@ export function parseAgentRequest(payload) {
         rawResponse.status === 'streaming' || rawResponse.status === 'error'
           ? rawResponse.status
           : 'complete';
-      const content =
-        status === 'error' &&
-        (!rawResponse.content || typeof rawResponse.content !== 'string')
-          ? ''
-          : requireText(
-              rawResponse.content,
-              `Turn ${turnIndex + 1} 的第 ${responseIndex + 1} 条回复`,
-              MAX_AGENT_MESSAGE_LENGTH,
-            );
+      let content = '';
+      if (status === 'complete') {
+        content = requireText(
+          rawResponse.content,
+          `Turn ${turnIndex + 1} 的第 ${responseIndex + 1} 条回复`,
+          MAX_AGENT_MESSAGE_LENGTH,
+        );
+      } else if (typeof rawResponse.content === 'string') {
+        content = rawResponse.content.trim();
+        if (content.length > MAX_AGENT_MESSAGE_LENGTH) {
+          throw new AgentRequestError(
+            `Turn ${turnIndex + 1} 的第 ${responseIndex + 1} 条回复过长。`,
+          );
+        }
+      } else if (rawResponse.content != null) {
+        throw new AgentRequestError(
+          `Turn ${turnIndex + 1} 的第 ${responseIndex + 1} 条回复无效。`,
+        );
+      }
       contextLength += content.length;
       return { role: rawResponse.role, content, status };
     });
