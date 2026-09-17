@@ -857,7 +857,7 @@ body { background: #f8f5ec; color: #393832; }
 .intro-character .character-caption { display: none; }
 .character-aura { opacity: .16; }
 .character-sprite { filter: drop-shadow(0 26px 24px rgba(66,54,58,.2)); }
-.character-sprite img { top: 50%; bottom: auto; translate: 0 -50%; }
+.character-sprite img { top: 50%; bottom: auto; }
 .character-sprite--single { overflow: visible; }
 .character-sprite--single img {
   top: 50%;
@@ -866,8 +866,7 @@ body { background: #f8f5ec; color: #393832; }
   height: 100%;
   max-width: none;
   object-fit: contain;
-  transform: none;
-  translate: -50% -50%;
+  transform: translate(-50%, -50%);
   scale: var(--figure-scale, 1);
 }
 .character-figure--angel { --figure-scale: 1.04; }
