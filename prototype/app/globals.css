@@ -811,7 +811,7 @@ body { background: #f8f5ec; color: #393832; }
 .stage-shell {
   background-color: #e7ddd1;
   background-image:
-    linear-gradient(180deg, rgba(255,252,244,.25), rgba(255,252,244,.36) 60%, rgba(255,252,244,.43)),
+    linear-gradient(180deg, rgba(255,252,244,.44), rgba(255,252,244,.5) 60%, rgba(255,252,244,.58)),
     url('/backgrounds/mythic-garden-v2.png');
 }
 .start-shell::before,
@@ -858,6 +858,19 @@ body { background: #f8f5ec; color: #393832; }
 .character-aura { opacity: .16; }
 .character-sprite { filter: drop-shadow(0 26px 24px rgba(66,54,58,.2)); }
 .character-sprite img { top: 50%; bottom: auto; translate: 0 -50%; }
+.character-sprite--single { overflow: visible; }
+.character-sprite--single img {
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: contain;
+  transform: none;
+  translate: -50% -50%;
+  scale: var(--figure-scale, 1);
+}
+.character-figure--angel { --figure-scale: 1.04; }
 .opening-dock,
 .dialogue-dock {
   width: min(800px, calc(100vw - 32px));
@@ -982,7 +995,7 @@ body { background: #f8f5ec; color: #393832; }
 .result-overlay,
 .result-overlay--devil {
   color: #46413c;
-  background: linear-gradient(rgba(255,252,244,.4),rgba(255,252,244,.58)), url('/backgrounds/mythic-garden-v2.png') center / cover;
+  background: linear-gradient(rgba(255,252,244,.5),rgba(255,252,244,.62)), url('/backgrounds/mythic-garden-v2.png') center / cover;
 }
 .result-rays { opacity: .12; }
 .result-card,

@@ -87,13 +87,13 @@ class AgentClientError extends Error {
   }
 }
 
-const poseIndex: Record<CharacterState, number> = {
-  idle: 0,
-  thinking: 2,
-  speaking: 1,
-  listening: 2,
-  victory: 3,
-  defeat: 4,
+const poseAsset: Record<CharacterState, string> = {
+  idle: 'idle',
+  thinking: 'thinking',
+  speaking: 'speaking',
+  listening: 'thinking',
+  victory: 'victory',
+  defeat: 'defeat',
 };
 
 const stateLabel: Record<CharacterState, string> = {
@@ -143,13 +143,12 @@ function CharacterFigure({ side, state, compact = false }: { side: Role; state: 
   return (
     <div
       className={`character-figure character-figure--${side} character-figure--${state}${compact ? ' character-figure--compact' : ''}`}
-      style={{ '--pose': poseIndex[state] } as React.CSSProperties}
     >
       <div className="character-aura" aria-hidden="true" />
       <div className="character-rings" aria-hidden="true"><i /><i /><i /></div>
-      <div className="character-sprite">
-        {/* oxlint-disable-next-line next/no-img-element -- sprite sheets rely on exact CSS cropping. */}
-        <img src={`/characters/${side}-states-flying-v2.png`} alt={`${copy.name} · ${stateLabel[state]}`} />
+      <div className="character-sprite character-sprite--single">
+        {/* oxlint-disable-next-line next/no-img-element -- transparent state artwork is served directly. */}
+        <img src={`/characters/hires/${side}-${poseAsset[state]}.png`} alt={`${copy.name} · ${stateLabel[state]}`} />
       </div>
     </div>
   );
