@@ -149,7 +149,7 @@ function CharacterFigure({ side, state, compact = false }: { side: Role; state: 
       <div className="character-rings" aria-hidden="true"><i /><i /><i /></div>
       <div className="character-sprite">
         {/* oxlint-disable-next-line next/no-img-element -- sprite sheets rely on exact CSS cropping. */}
-        <img src={`/characters/${side}-states-flying.png`} alt={`${copy.name} · ${stateLabel[state]}`} />
+        <img src={`/characters/${side}-states-flying-v2.png`} alt={`${copy.name} · ${stateLabel[state]}`} />
       </div>
     </div>
   );

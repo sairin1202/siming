@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
-import { Noto_Sans_SC, Playfair_Display } from 'next/font/google';
+import { Cinzel, Noto_Serif_SC } from 'next/font/google';
 import './globals.css';
 
-const sans = Noto_Sans_SC({
+const serif = Noto_Serif_SC({
   variable: '--font-sans-cn',
   subsets: ['latin'],
 });
 
-const display = Playfair_Display({
+const display = Cinzel({
   variable: '--font-display',
   subsets: ['latin'],
 });
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN">
-      <body className={`${sans.variable} ${display.variable}`}>{children}</body>
+      <body className={`${serif.variable} ${display.variable}`}>{children}</body>
     </html>
   );
 }
