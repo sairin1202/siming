@@ -852,8 +852,8 @@ body { background: #f8f5ec; color: #393832; }
   width: min(42vw, 47vh, 500px);
   height: 92%;
 }
-.intro-character--angel .character-figure { left: 72%; }
-.intro-character--devil .character-figure { left: 28%; }
+.intro-character--angel .character-figure,
+.intro-character--devil .character-figure { left: 50%; }
 .intro-character .character-caption { display: none; }
 .character-aura { opacity: .16; }
 .character-sprite { filter: drop-shadow(0 26px 24px rgba(66,54,58,.2)); }
@@ -916,10 +916,10 @@ body { background: #f8f5ec; color: #393832; }
   width: min(42vw, 47vh, 500px);
   height: 95%;
 }
-.duel-stage .character-panel--angel .character-figure { left: 72%; }
-.duel-stage .character-panel--devil .character-figure { left: 28%; }
-.character-panel--angel .panel-state { left: 72%; }
-.character-panel--devil .panel-state { left: 28%; }
+.duel-stage .character-panel--angel .character-figure,
+.duel-stage .character-panel--devil .character-figure,
+.character-panel--angel .panel-state,
+.character-panel--devil .panel-state { left: 50%; }
 .character-panel::before { display: none; }
 .panel-state { top: 12px; color: #5c5346; border: 1px solid rgba(139,112,73,.36); border-radius: 3px; background: rgba(255,252,244,.87); font-size: 12px; letter-spacing: .08em; }
 .character-panel.is-speaking .panel-state,
@@ -1011,12 +1011,6 @@ body { background: #f8f5ec; color: #393832; }
 .restart-button:hover { background: #fff; }
 
 @media (min-width: 761px) and (max-width: 1100px) {
-  .intro-character--angel .character-figure,
-  .duel-stage .character-panel--angel .character-figure,
-  .character-panel--angel .panel-state { left: 60%; }
-  .intro-character--devil .character-figure,
-  .duel-stage .character-panel--devil .character-figure,
-  .character-panel--devil .panel-state { left: 40%; }
   .speech-bubble { width: min(270px, 28vw); }
 }
 
