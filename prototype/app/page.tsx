@@ -32,6 +32,7 @@ import {
   summarizeDecisionHistory,
   upsertDecisionHistory,
 } from '@/lib/history.mjs';
+import { loadDatabaseHistory, saveDatabaseHistory } from '@/lib/history-client.mjs';
 import { resolveCharacterState } from '@/lib/character-state.mjs';
 
 type Role = 'angel' | 'devil';
@@ -126,6 +127,10 @@ function makeId(prefix: string) {
 
 function now() {
   return new Date().toISOString();
+}
+
+function browserStorage(): Storage | undefined {
+  try { return window.localStorage; } catch { return undefined; }
 }
 
 function formatHistoryDate(value: string) {
@@ -473,7 +478,7 @@ function HistoryDialog({
         <DialogHeader>
           <span className="dialog-kicker"><HistoryIcon /> DECISION ARCHIVE</span>
           <DialogTitle>你的决策记录</DialogTitle>
-          <DialogDescription>每次对话和最终选择都保存在这台设备上。</DialogDescription>
+          <DialogDescription>每次对话和最终选择都会自动保存，使用此浏览器可继续查看。</DialogDescription>
         </DialogHeader>
 
         <section className="career-stats" aria-label="胜负统计">
@@ -548,6 +553,8 @@ export default function Home() {
   const [isHydrated, setIsHydrated] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [storageError, setStorageError] = useState(false);
+  const [databaseReady, setDatabaseReady] = useState(false);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
   const [thinkingRole, setThinkingRole] = useState<Role | null>(null);
   const [activeReplyId, setActiveReplyId] = useState<string | null>(null);
   const [isReceiving, setIsReceiving] = useState(false);
@@ -556,17 +563,29 @@ export default function Home() {
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const activeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
   const speakerHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const historySaveRef = useRef<Promise<void>>(Promise.resolve());
+  const historyLoadRef = useRef<Promise<{ decisions: Decision[]; currentDecisionId: string | null }> | null>(null);
 
   useEffect(() => {
-    const snapshot = loadDecisionHistory(window.localStorage);
-    const restoredDecision = snapshot.decisions.find(
-      (item: Decision) => item.id === snapshot.currentDecisionId,
-    ) as Decision | undefined;
-    queueMicrotask(() => {
+    let cancelled = false;
+    async function restore() {
+      let snapshot;
+      try {
+        historyLoadRef.current ??= loadDatabaseHistory(browserStorage());
+        snapshot = await historyLoadRef.current;
+        if (cancelled) return;
+        setDatabaseReady(true);
+      } catch (error) {
+        snapshot = loadDecisionHistory(browserStorage());
+        if (cancelled) return;
+        setDatabaseError(error instanceof Error ? error.message : '暂时无法读取对话记录。');
+      }
       setHistory(snapshot.decisions as Decision[]);
-      setDecision(restoredDecision || null);
+      setDecision(snapshot.decisions.find((item: Decision) => item.id === snapshot.currentDecisionId) || null);
       setIsHydrated(true);
-    });
+    }
+    void restore();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -578,12 +597,44 @@ export default function Home() {
       return;
     }
 
-    const saved = saveDecisionHistory(window.localStorage, {
+    const saved = saveDecisionHistory(browserStorage(), {
       decisions: history,
       currentDecisionId: decision && !decision.verdict ? decision.id : null,
     });
     queueMicrotask(() => setStorageError(!saved));
-  }, [decision, history, isHydrated]);
+    if (databaseReady && !thinkingRole) {
+      const update = { decision, currentDecisionId: decision && !decision.verdict ? decision.id : null };
+      historySaveRef.current = historySaveRef.current.then(async () => {
+        try {
+          await saveDatabaseHistory(update);
+          setDatabaseError(null);
+        } catch (error) {
+          setDatabaseError(error instanceof Error ? error.message : '暂时无法保存对话记录。');
+        }
+      });
+    }
+  }, [decision, history, isHydrated, databaseReady, thinkingRole]);
+
+  async function retryDatabaseSave() {
+    const snapshot = {
+      decisions: decision ? upsertDecisionHistory(history, decision) as Decision[] : history,
+      currentDecisionId: decision && !decision.verdict ? decision.id : null,
+    };
+    historySaveRef.current = historySaveRef.current.then(async () => {
+      try {
+        // Establish a session and finish any interrupted legacy import first.
+        await loadDatabaseHistory(browserStorage());
+        for (const item of snapshot.decisions) {
+          await saveDatabaseHistory({ decision: item, currentDecisionId: null });
+        }
+        await saveDatabaseHistory({ decision: null, currentDecisionId: snapshot.currentDecisionId });
+        setDatabaseReady(true);
+        setDatabaseError(null);
+      } catch (error) {
+        setDatabaseError(error instanceof Error ? error.message : '暂时无法保存对话记录。');
+      }
+    });
+  }
 
   useEffect(() => () => {
     activeRequestRef.current?.controller.abort();
@@ -652,6 +703,8 @@ export default function Home() {
     const isCurrentRequest = () => activeRequestRef.current?.id === requestId;
 
     try {
+      await historySaveRef.current;
+      if (!isCurrentRequest()) return;
       const response = await fetch('/api/agent', {
         method: 'POST',
         headers: {
@@ -660,17 +713,17 @@ export default function Home() {
         },
         body: JSON.stringify({
           role,
-          decisionTitle: sourceDecision.title,
-          turns: sourceDecision.turns,
+          decision: sourceDecision,
+          replyId,
         }),
         signal: controller.signal,
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        const payload = (await response.json().catch(() => null)) as { error?: string; retryable?: boolean } | null;
         throw new AgentClientError(
           payload?.error || '无法开始这次回复。',
-          response.status >= 500,
+          payload?.retryable === true || response.status >= 500,
         );
       }
       if (!response.body) throw new AgentClientError('服务器没有返回可读的内容。');
@@ -875,13 +928,7 @@ export default function Home() {
   }
 
   if (!isHydrated) {
-    return (
-      <StartScreen
-        historyCount={0}
-        onHistory={() => setHistoryOpen(true)}
-        onStart={startDecision}
-      />
-    );
+    return <main className="stage-shell" />;
   }
 
   const historyDialog = (
@@ -892,9 +939,9 @@ export default function Home() {
       onOpenDecision={openHistoryDecision}
     />
   );
-  const storageWarning = storageError ? (
+  const storageWarning = databaseError || storageError ? (
     <output className="storage-warning">
-      浏览器暂时无法保存记录，本次对话仍可继续。
+      {databaseError ? <>{databaseError} <button type="button" onClick={() => void retryDatabaseSave()}>重试保存</button></> : '浏览器暂时无法保存本地备份，对话仍会保存到数据库。'}
     </output>
   ) : null;
 

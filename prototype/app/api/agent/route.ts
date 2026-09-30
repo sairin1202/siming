@@ -5,10 +5,11 @@ import {
   getRequestSafetyMode,
   parseAgentRequest,
 } from '@/lib/agent.mjs';
+import { beginGeneration, finishGeneration, MAX_GENERATION_MS, withDatabaseSession } from '@/lib/database.mjs';
+import { assertSameOrigin, parseDecision, parseId, PersistenceError, persistenceErrorResponse, readJsonBody } from '@/lib/persistence.mjs';
 
 const DEFAULT_API_BASE_URL = 'https://nevatoken.com/v1';
 const DEFAULT_MODEL = 'MaaS_GP_5.6_luna_20260709';
-const MAX_REQUEST_BYTES = 100_000;
 const MAX_OUTPUT_LENGTH = 4_000;
 const MAX_ATTEMPTS = 3;
 
@@ -132,6 +133,7 @@ async function pipeLunaStream(
   response: Response,
   controller: ReadableStreamDefaultController<Uint8Array>,
   signal: AbortSignal,
+  onContent: (content: string) => void,
 ) {
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('application/json')) {
@@ -140,6 +142,7 @@ async function pipeLunaStream(
     };
     const content = payload.choices?.[0]?.message?.content;
     if (!content) throw new Error('Luna returned an empty response.');
+    onContent(content.slice(0, MAX_OUTPUT_LENGTH));
     controller.enqueue(
       eventChunk({
         type: 'delta',
@@ -172,6 +175,7 @@ async function pipeLunaStream(
         const remaining = MAX_OUTPUT_LENGTH - outputLength;
         const safeContent = content.slice(0, remaining);
         outputLength += safeContent.length;
+        onContent(safeContent);
         controller.enqueue(eventChunk({ type: 'delta', content: safeContent }));
       } catch {
         // Ignore provider keep-alives and non-content events.
@@ -227,56 +231,74 @@ function publicError(error: unknown): Extract<StreamEvent, { type: 'error' }> {
 }
 
 export async function POST(request: Request) {
-  const origin = request.headers.get('origin');
-  if (origin && origin !== new URL(request.url).origin) {
-    return Response.json({ error: '不允许跨站调用。' }, { status: 403 });
-  }
-  const contentLength = Number(request.headers.get('content-length') || 0);
-  if (contentLength > MAX_REQUEST_BYTES) {
-    return Response.json({ error: '请求内容过长。' }, { status: 413 });
-  }
-
   let agentRequest;
+  let generation;
+  let cookie: string | null;
   try {
-    const rawBody = await request.text();
-    if (rawBody.length > MAX_REQUEST_BYTES) {
-      return Response.json({ error: '请求内容过长。' }, { status: 413 });
+    assertSameOrigin(request);
+    const payload = await readJsonBody(request);
+    const decision = parseDecision(payload.decision);
+    const replyId = parseId(payload.replyId);
+    const role = payload.role;
+    const latestTurn = decision.turns[decision.turns.length - 1];
+    const target = latestTurn.responses[latestTurn.responses.length - 1];
+    if (!target || target.id !== replyId || target.role !== role || target.status !== 'streaming') {
+      throw new PersistenceError(400, '只能生成当前轮最后一条待回复消息。');
     }
-    agentRequest = parseAgentRequest(JSON.parse(rawBody));
+    // Validate model context before starting a database generation.
+    parseAgentRequest({ role, decisionTitle: decision.title, turns: decision.turns });
+    const result = await withDatabaseSession(request, (connection, ownerId) => beginGeneration(connection, ownerId, decision, replyId, role));
+    generation = result.value;
+    cookie = result.cookie;
+    agentRequest = parseAgentRequest({ role, decisionTitle: generation.decision.title, turns: generation.decision.turns });
   } catch (error) {
-    const message =
-      error instanceof AgentRequestError ? error.message : '请求格式无效。';
-    return Response.json({ error: message }, { status: 400 });
+    if (error instanceof AgentRequestError) return Response.json({ error: error.message }, { status: 400 });
+    return persistenceErrorResponse(error);
   }
 
   const safetyMode = getRequestSafetyMode(agentRequest);
+  const abortController = new AbortController();
+  const signal = AbortSignal.any([request.signal, abortController.signal, AbortSignal.timeout(MAX_GENERATION_MS)]);
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      let content = '';
+      let persisted = false;
       try {
         controller.enqueue(eventChunk({ type: 'meta', safetyMode }));
         if (safetyMode === 'crisis') {
+          content = CRISIS_RESPONSE;
           controller.enqueue(
             eventChunk({ type: 'delta', content: CRISIS_RESPONSE }),
           );
         } else {
           const messages = buildAgentMessages(agentRequest, safetyMode);
-          const response = await requestLuna(messages, request.signal);
-          await pipeLunaStream(response, controller, request.signal);
+          const response = await requestLuna(messages, signal);
+          await pipeLunaStream(response, controller, signal, (delta) => { content += delta; });
         }
-        if (!request.signal.aborted)
+        if (signal.aborted) throw new Error('Generation interrupted.');
+        // Only report completion after the full reply has reached MySQL.
+        const saved = await finishGeneration(generation, { content, status: 'complete', safetyMode });
+        if (!saved) throw new Error('Generation superseded.');
+        persisted = true;
+        if (!signal.aborted)
           controller.enqueue(eventChunk({ type: 'done' }));
       } catch (error) {
-        if (!request.signal.aborted) {
-          console.error(
-            'Agent generation failed:',
-            error instanceof Error ? error.message : error,
-          );
-          controller.enqueue(eventChunk(publicError(error)));
+        const publicFailure = publicError(error);
+        if (!persisted) {
+          try {
+            await finishGeneration(generation, { content, status: 'error', safetyMode, error: publicFailure });
+          } catch (databaseError) {
+            console.error('Reply persistence failed:', (databaseError as { code?: string }).code || 'UNKNOWN');
+          }
+        }
+        if (!request.signal.aborted && !abortController.signal.aborted) {
+          controller.enqueue(eventChunk(publicFailure));
         }
       } finally {
-        controller.close();
+        if (!abortController.signal.aborted) controller.close();
       }
     },
+    cancel() { abortController.abort(); },
   });
 
   return new Response(stream, {
@@ -285,6 +307,7 @@ export async function POST(request: Request) {
       Connection: 'keep-alive',
       'Content-Type': 'text/event-stream; charset=utf-8',
       'X-Accel-Buffering': 'no',
+      ...(cookie ? { 'Set-Cookie': cookie } : {}),
     },
   });
 }

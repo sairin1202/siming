@@ -645,7 +645,7 @@ button, textarea { font: inherit; }
   position: relative;
   isolation: isolate;
   background-color: #a68d9b;
-  background-image: url('/backgrounds/mythic-garden-v2.png');
+  background-image: url('/backgrounds/mythic-garden-v2.jpg');
   background-size: cover;
   background-position: center center;
 }
@@ -761,7 +761,7 @@ button, textarea { font: inherit; }
 .speech-bubble--devil { right: 16%; left: auto; }
 .dialogue-dock { border-color: rgba(255,235,195,.55); background: rgba(34,26,42,.87); }
 .result-overlay,
-.result-overlay--devil { background: linear-gradient(90deg, rgba(25,18,31,.54), rgba(25,18,31,.4)), url('/backgrounds/mythic-garden-v2.png') center / cover; }
+.result-overlay--devil { background: linear-gradient(90deg, rgba(25,18,31,.54), rgba(25,18,31,.4)), url('/backgrounds/mythic-garden-v2.jpg') center / cover; }
 
 @media (max-width: 760px) {
   .start-shell,
@@ -812,7 +812,7 @@ body { background: #f8f5ec; color: #393832; }
   background-color: #e7ddd1;
   background-image:
     linear-gradient(180deg, rgba(255,252,244,.44), rgba(255,252,244,.5) 60%, rgba(255,252,244,.58)),
-    url('/backgrounds/mythic-garden-v2.png');
+    url('/backgrounds/mythic-garden-v2.jpg');
 }
 .start-shell::before,
 .stage-shell::before {
@@ -994,7 +994,7 @@ body { background: #f8f5ec; color: #393832; }
 .result-overlay,
 .result-overlay--devil {
   color: #46413c;
-  background: linear-gradient(rgba(255,252,244,.5),rgba(255,252,244,.62)), url('/backgrounds/mythic-garden-v2.png') center / cover;
+  background: linear-gradient(rgba(255,252,244,.5),rgba(255,252,244,.62)), url('/backgrounds/mythic-garden-v2.jpg') center / cover;
 }
 .result-rays { opacity: .12; }
 .result-card,

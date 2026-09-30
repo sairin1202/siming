@@ -166,7 +166,7 @@ flowchart TD
 - 一句简短收尾。
 - “开始新的决策”入口。
 
-首版会在当前设备上保存完整决策记录和历史会话，并根据已结算记录统计天使与恶魔的胜场和胜率。不包含跨设备同步或排行榜。
+完整决策记录和历史会话保存到 MySQL，并根据已结算记录统计天使与恶魔的胜场和胜率。浏览器通过匿名会话 Cookie 访问自己的记录，本地存储保留备份；目前不包含跨设备同步或排行榜。
 
 ## 建议的数据结构
 
@@ -207,7 +207,7 @@ AgentResponse
 - 新的用户消息开启新一轮。
 - 用户亲自选择 Yes 或 No。
 - 根据选择判定胜方并展示结算。
-- 在当前设备自动保存进行中和已结算的决策。
+- 自动保存进行中和已结算的决策，并在同一浏览器恢复。
 - 查看历史会话、恢复未完成决策和查看双方战绩。
 - 桌面端和移动端均有持续可见的角色画面与基本状态反馈。
 - 模型请求失败时可以重试，且不会重复创建用户消息或轮次。
@@ -263,6 +263,7 @@ Angel & Devil 是帮助用户梳理想法的说服工具，不是医疗、法律
 - [x] 确定 React 状态机、透明角色立绘与 CSS 动效方案
 - [x] 实现可交互的响应式前端原型
 - [x] 实现本地决策保存、历史会话和胜负统计
+- [x] 接入 MySQL，持久化决策、轮次、角色回复及最终结果，并迁移浏览器已有历史
 - [x] 接入真实天使 / 恶魔 Agent 提示词与完整共享上下文
 - [x] 实现流式回复、瞬时错误自动重试和原位手动重试
 - [x] 实现请求校验、提示注入防护和高风险 / 危机安全分流
@@ -279,14 +280,60 @@ Angel & Devil 是帮助用户梳理想法的说服工具，不是医疗、法律
 ```bash
 cd prototype
 npm install
-cp .env.example .env.local
-# 编辑 .env.local，填入 NevaToken API key 和控制台显示的 Luna 模型 ID
+cp .env.example .env
+# 编辑 .env，填入模型凭证和 MYSQL_* 数据库配置
+npm run db:init
 npm run dev
 ```
 
 Agent 默认通过 `https://nevatoken.com/v1/chat/completions` 调用
-`MaaS_GP_5.6_luna_20260709`；两者都可在 `.env.local` 中覆盖。API key 仅由服务端
-读取，不会发送到浏览器。
+`MaaS_GP_5.6_luna_20260709`；两者都可在 `.env` 中覆盖。模型凭证和数据库密码仅由服务端读取，不会发送到浏览器。框架仍支持 `.env.local` 覆盖，但 `db:init` 和 `test:db` 直接读取 `.env`，请保持数据库配置一致。
 
-执行 `npm run build` 可生成 Sites 部署产物。依赖目录与构建产物不纳入 Git，它们可通过 `package-lock.json` 恢复。
+数据库使用 `owners`、`browser_sessions`、`decisions`、`turns` 和 `replies` 五张表，定义见 [`prototype/database/schema.sql`](prototype/database/schema.sql)。`db:init` 只创建缺失的表，不清空数据，也不修改已有表。`GET /api/history` 恢复历史，`PUT /api/history` 保存对话或当前决策；`POST /api/agent` 在调用模型前保存用户消息，生成结束后保存完整回复，再通知前端完成。重试复用原回复 ID，结算后迟到的生成结果不会覆盖记录。
+
+浏览器首次接入时会把已有本地历史导入数据库。记录通过 HttpOnly 会话 Cookie 隔离；清除 Cookie 或换设备后不会自动取得原记录。数据库不可用时页面保留本地备份，并提供“重试保存”。线上部署还需要为运行环境配置 `MYSQL_*` 凭证及可访问的数据库地址；本次数据库初始化与验证针对 `.env` 指定的实例。
+
+验证命令：`npm test`、`npm run test:db`、`npx tsc --noEmit` 和 `npm run build`。数据库集成测试只清理自己创建的测试会话和记录。开发服务运行时，也可执行 `npm run test:api` 验证 HTTP 接口与流式保存。
+
+执行 `npm run build` 生成 Node 生产构建，`NODE_ENV=production npm start -- --hostname 0.0.0.0 --port 3000` 启动服务。一个 Node 进程提供页面、静态资源和 `/api/*` 接口。依赖目录与构建产物不纳入 Git，它们可通过 `package-lock.json` 恢复。
+
+## Node 服务器发布
+
+在本机项目根目录执行：
+
+```bash
+./deploy/deploy.sh --dry-run   # 只检查打包，不连接服务器
+./deploy/deploy.sh            # 发布到 root@212.64.23.79:/opt/angel_devil
+```
+
+服务器需要 Linux、systemd、安装到系统路径的 Node.js >=22.13、npm、curl、tar 和可访问的 MySQL；SSH 账号需要 root 或免密 sudo。使用服务器现有 SSH 密钥、口令或扫码认证。首次发布读取本机 `prototype/.env`，通过 SSH 单独传输配置，后续保留服务器已有配置。
+
+自定义登录和配置：
+
+```bash
+SSH_TARGET=ubuntu@212.64.23.79 SSH_KEY="$HOME/.ssh/id_ed25519" ./deploy/deploy.sh
+ENV_FILE=/path/to/server.env ./deploy/deploy.sh --update-env
+# 使用 ~/.ssh/config 中的别名也可以：SSH_TARGET=angel-server ./deploy/deploy.sh
+```
+
+脚本上传源码和依赖锁文件，在服务器执行 `npm ci`、单元测试、生产构建和 `db:init`；数据库和账号应提前创建，`db:init` 只创建缺失的表。页面与 `GET /api/health` 的数据库查询通过后，才切换正式版本，启动或重启 `angel-devil.service`。运行失败会恢复旧版本及环境配置；建表不做反向回滚。旧版本保留在 `releases/`，发布锁防止同时部署。
+
+服务器目录：
+
+```text
+/opt/angel_devil/
+├── current -> releases/<版本号>
+├── releases/<版本号>/       # 源码、Linux 依赖和生产构建
+└── shared/.env              # 仅 root 和服务账号可读
+```
+
+默认访问地址为 `http://212.64.23.79:3000`，需要在服务器防火墙及腾讯云安全组允许 TCP 3000。可用 `APP_PORT=其他端口` 覆盖。服务由专用账号 `angel-devil` 运行，systemd 提供开机启动和异常重启。在服务器查看状态与日志：
+
+```bash
+sudo systemctl status angel-devil
+sudo journalctl -u angel-devil -f
+sudo systemctl restart angel-devil
+```
+
+若前面接 Nginx，可用 `APP_HOST=127.0.0.1` 发布，并在 `shared/.env` 设置 `VINEXT_TRUST_PROXY=1`；Nginx 应转发原始 `Host`、`X-Forwarded-Proto`，并关闭流式接口的代理缓冲。
 - [ ] 完成 MVP

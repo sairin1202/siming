@@ -1,6 +1,6 @@
 # 角色与分享图生成记录
 
-以下素材均使用 Codex 内置 ImageGen 生成。网站引用的最终素材位于 `prototype/public/characters/` 和 `prototype/public/og.png`，本目录保留原始输出和生成记录。
+以下素材均使用 Codex 内置 ImageGen 生成。网站引用的最终素材位于 `prototype/public/characters/` 和 `prototype/public/og.jpg`，本目录保留素材与生成记录。背景和分享图已转换为 JPG，角色立绘保留透明 PNG；以下提示词保留生成时的原始要求。
 
 ## 天使五态立绘
 
@@ -43,7 +43,7 @@ Avoid: labels, captions, text, letters, symbols, borders, frames, cards, scenery
 
 ## 社交分享图
 
-文件：`angel-devil-og-social-preview.png`
+文件：`angel-devil-og-social-preview.jpg`
 
 ```text
 Use case: ads-marketing / stylized-concept
