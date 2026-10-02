@@ -6,10 +6,20 @@ export class RequestError extends Error {
   }
 }
 
+/** The page's own origin; behind a trusted proxy (VINEXT_TRUST_PROXY=1) the scheme comes from it. */
+function ownOrigin(request) {
+  const url = new URL(request.url);
+  const forwarded = request.headers.get('x-forwarded-proto')?.split(',')[0].trim();
+  if (process.env.VINEXT_TRUST_PROXY === '1' && (forwarded === 'https' || forwarded === 'http')) {
+    return `${forwarded}://${url.host}`;
+  }
+  return url.origin;
+}
+
 export function assertSameOrigin(request) {
   const origin = request.headers.get('origin');
   if (
-    (origin && origin !== new URL(request.url).origin) ||
+    (origin && origin !== ownOrigin(request)) ||
     request.headers.get('sec-fetch-site') === 'cross-site'
   ) {
     throw new RequestError(403, '不允许跨站调用。');
