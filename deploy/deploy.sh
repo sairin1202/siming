@@ -96,7 +96,7 @@ COPYFILE_DISABLE=1 tar -czf "$WORK_DIR/app.tar.gz" -C "$PROJECT_DIR" \
   --exclude='.env' --exclude='.env.*' --exclude='node_modules' --exclude='dist' \
   --exclude='.DS_Store' --exclude='.git' \
   package.json package-lock.json vite.config.ts next.config.ts tsconfig.json \
-  app components hooks lib public database scripts tests
+  app components hooks lib public scripts
 tar -tzf "$WORK_DIR/app.tar.gz" > "$WORK_DIR/files.txt"
 if excluded_files=$(LC_ALL=C awk '/(^|\/)\.env($|\.)|(^|\/)node_modules\// { print; found=1 } END { exit !found }' "$WORK_DIR/files.txt"); then
   die "源码压缩包包含应排除的文件: $excluded_files"

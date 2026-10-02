@@ -1,1 +1,5 @@
 .superpowers/
+
+# generate-media.mjs intermediates
+generated-art/ink/*-raw.mp4
+generated-art/ink/*-frame.jpg

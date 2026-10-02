@@ -122,8 +122,8 @@ run_app() {
 # 服务安装包来自源码与 lock 文件，不上传本机 node_modules。
 # shellcheck disable=SC2016 # 此处是 JavaScript 模板字符串。
 run_app "$NODE_BIN" --env-file=.env --input-type=module -e '
-  for (const key of ["MYSQL_HOST", "MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD", "NEVA_API_KEY"]) {
-    if (process.env[key] === undefined || (key !== "MYSQL_PASSWORD" && !process.env[key].trim())) {
+  for (const key of ["NEVA_API_KEY"]) {
+    if (!process.env[key]?.trim()) {
       console.error(`缺少环境配置: ${key}`); process.exit(1);
     }
   }
@@ -131,7 +131,6 @@ run_app "$NODE_BIN" --env-file=.env --input-type=module -e '
 run_app "$NPM_BIN" ci --include=dev --no-audit --no-fund
 run_app "$NPM_BIN" test
 run_app "$NPM_BIN" run build
-run_app "$NPM_BIN" run db:init
 
 CHECK_PORT=$(run_app "$NODE_BIN" --input-type=module -e 'import net from "node:net"; const server=net.createServer(); server.listen(0,"127.0.0.1",()=>{console.log(server.address().port);server.close()})')
 systemd-run --quiet --unit="$CHECK_UNIT" --uid="$APP_USER" --gid="$APP_USER" \

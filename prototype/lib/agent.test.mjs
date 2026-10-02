@@ -1,120 +1,59 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  AgentRequestError,
-  buildAgentMessages,
-  detectSafetyMode,
-  parseAgentRequest,
-} from './agent.mjs';
+import { buildFollowupMessages, buildReadingMessages, detectSafetyMode } from './agent.mjs';
+import { advance, initialState } from './guide.mjs';
 
-const validPayload = {
-  role: 'angel',
-  decisionTitle: '要不要接这个项目？',
-  turns: [
-    {
-      userMessage: '机会很好，但我最近很累。',
-      responses: [
-        {
-          role: 'devil',
-          content: '先别忽略你的精力成本。',
-          status: 'complete',
-        },
-      ],
-    },
-  ],
-};
+const now = new Date(2026, 9, 2);
+const profile = { date: '1995-03-08', time: '07:00', gender: 'female', longitude: 120.2 };
+// A hexagram reading: choose casting, ask, throw.
+const chosen = advance({ state: initialState(), action: { type: 'mode', mode: 'gua' }, now });
+const asked = advance({ state: chosen.state, message: '要不要换工作', now });
+const payload = advance({ state: asked.state, action: { type: 'cast', tosses: [7, 8, 9, 7, 8, 7] }, now }).steps.at(-1)
+  .payload;
+// A chart reading: choose the chart, ask with a saved birth.
+const mingState = advance({ state: initialState(), profile, action: { type: 'mode', mode: 'ming' }, now }).state;
+const mingPayload = advance({ state: mingState, profile, message: '要不要换工作', now }).steps.at(-1).payload;
 
-test('parseAgentRequest validates and preserves the shared conversation', () => {
-  const request = parseAgentRequest(validPayload);
-
-  assert.equal(request.role, 'angel');
-  assert.equal(request.turns[0].responses[0].role, 'devil');
-  assert.equal(request.turns[0].responses[0].content, '先别忽略你的精力成本。');
+test('detectSafetyMode flags crisis and high-stakes topics', () => {
+  assert.equal(detectSafetyMode('我想死'), 'crisis');
+  assert.equal(detectSafetyMode('要不要把钱投资股票'), 'high_stakes');
+  assert.equal(detectSafetyMode('要不要换工作'), 'standard');
 });
 
-test('parseAgentRequest accepts the empty in-flight reply placeholder', () => {
-  const request = parseAgentRequest({
-    ...validPayload,
-    turns: [
-      {
-        userMessage: '这一轮请天使先说。',
-        responses: [
-          {
-            role: 'angel',
-            content: '',
-            status: 'streaming',
-          },
-        ],
-      },
-    ],
-  });
-
-  assert.equal(request.turns[0].responses[0].status, 'streaming');
-  assert.equal(request.turns[0].responses[0].content, '');
-  assert.doesNotMatch(
-    buildAgentMessages(request, 'standard')[1].content,
-    /"speaker": "天使 \/ YES"/,
-  );
+test('a hexagram reading carries the hexagram and its words, and nothing of the chart', () => {
+  const [system, user] = buildReadingMessages(payload, 'standard');
+  assert.match(system.content, /不得自造经文/);
+  assert.match(system.content, /不涉生辰命理/);
+  assert.match(system.content, /不超过四十字/);
+  assert.match(system.content, /不要用任何标点符号/);
+  const data = JSON.parse(user.content.slice(user.content.indexOf('{')));
+  assert.equal(data.问题, '要不要换工作');
+  assert.equal(data.卦.本卦.卦名, payload.reading.gua.present.name);
+  assert.equal(data.卦.所占之辞[0].原文, payload.reading.gua.reading[0].text);
+  assert.equal(data.流年, undefined);
+  assert.equal(data.结论, undefined);
 });
 
-test('parseAgentRequest rejects invalid roles and oversized user messages', () => {
-  assert.throws(
-    () => parseAgentRequest({ ...validPayload, role: 'judge' }),
-    AgentRequestError,
-  );
-  assert.throws(
-    () =>
-      parseAgentRequest({
-        ...validPayload,
-        turns: [{ userMessage: 'x'.repeat(2001), responses: [] }],
-      }),
-    AgentRequestError,
-  );
+test('a chart reading carries the timing and the fixed lean, and no hexagram', () => {
+  const [system, user] = buildReadingMessages(mingPayload, 'standard');
+  assert.match(system.content, /不涉卦象/);
+  assert.match(system.content, /不得自造干支/);
+  const data = JSON.parse(user.content.slice(user.content.indexOf('{')));
+  assert.equal(data.流年, mingPayload.reading.signal.liunian.ganzhi);
+  assert.ok(data.结论.startsWith({ go: '宜行', wait: '待时', stop: '宜止' }[mingPayload.reading.lean.lean]));
+  assert.equal(data.卦, undefined);
 });
 
-test('buildAgentMessages gives the angel a fixed stance and the complete context', () => {
-  const request = parseAgentRequest({
-    ...validPayload,
-    turns: [
-      ...validPayload.turns,
-      {
-        userMessage: '如果只试两周呢？',
-        responses: [
-          {
-            role: 'angel',
-            content: '那就先设定退出条件。',
-            status: 'complete',
-          },
-          {
-            role: 'devil',
-            content: '这条失败回复不应进入上下文。',
-            status: 'error',
-          },
-        ],
-      },
-    ],
-  });
-  const messages = buildAgentMessages(request, 'standard');
-
-  assert.match(messages[0].content, /YES/);
-  assert.match(messages[0].content, /不能替用户作出最终决定/);
-  assert.match(messages[1].content, /机会很好，但我最近很累/);
-  assert.match(messages[1].content, /先别忽略你的精力成本/);
-  assert.match(messages[1].content, /如果只试两周呢/);
-  assert.doesNotMatch(messages[1].content, /这条失败回复/);
+test('high-stakes readings must point to professionals', () => {
+  const [system] = buildReadingMessages(payload, 'high_stakes');
+  assert.match(system.content, /专业之士/);
 });
 
-test('buildAgentMessages keeps the devil on the NO side', () => {
-  const request = parseAgentRequest({ ...validPayload, role: 'devil' });
-  const messages = buildAgentMessages(request, 'standard');
-
-  assert.match(messages[0].content, /NO/);
-  assert.match(messages[0].content, /不做、暂停或延后/);
-});
-
-test('detectSafetyMode pauses game persuasion for imminent harm', () => {
-  assert.equal(detectSafetyMode('我现在想死，已经站在楼顶了'), 'crisis');
-  assert.equal(detectSafetyMode('我要不要起诉公司？'), 'high_stakes');
-  assert.equal(detectSafetyMode('要不要换一个新工作？'), 'standard');
+test('follow-up prompt keeps recent history and the question', () => {
+  const history = Array.from({ length: 12 }, (_, index) => ({ from: index % 2 ? 'guide' : 'user', text: `第${index}句` }));
+  const [, user] = buildFollowupMessages({ ...payload, message: '那下个月呢' }, history, 'standard');
+  const data = JSON.parse(user.content.slice(user.content.indexOf('{')));
+  assert.equal(data.追问, '那下个月呢');
+  assert.equal(data.最近对话.length, 8);
 });

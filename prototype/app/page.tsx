@@ -1,1025 +1,714 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import {
-  ChevronRight,
-  Clock3,
-  Feather,
-  Flame,
-  Gavel,
-  History as HistoryIcon,
-  MessageCircleMore,
-  RotateCcw,
-  Sparkles,
-  Swords,
-  Trophy,
-  X,
-} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { Button } from '@/components/ui/button';
 import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  loadDecisionHistory,
-  saveDecisionHistory,
-  summarizeDecisionHistory,
-  upsertDecisionHistory,
-} from '@/lib/history.mjs';
-import { loadDatabaseHistory, saveDatabaseHistory } from '@/lib/history-client.mjs';
-import { resolveCharacterState } from '@/lib/character-state.mjs';
+  BirthCard,
+  DaysCard,
+  monthText,
+  type CardData,
+  type ChartCardData,
+} from '@/components/siming/cards';
+import { BirthForm, type BirthFormValue } from '@/components/siming/birth-form';
+import { ChartCasting } from '@/components/siming/casting';
+import { CastRitual, GuaFigure, type GuaCardData } from '@/components/siming/ritual';
+import { Guide, type GuideMood } from '@/components/siming/guide';
+import { dropOnWater } from '@/components/siming/ripples';
+import { InkScene } from '@/components/siming/scene';
+import { InkWriting, toHanNumerals } from '@/components/siming/writing';
 
-type Role = 'angel' | 'devil';
-type CharacterState = 'idle' | 'thinking' | 'speaking' | 'listening' | 'victory' | 'defeat';
-type Verdict = 'yes' | 'no';
-type ReplyStatus = 'streaming' | 'complete' | 'error';
+type Lean = { lean: 'go' | 'wait' | 'stop'; until: string | null; score: number };
 
-type Reply = {
-  id: string;
-  role: Role;
-  content: string;
-  status: ReplyStatus;
-  createdAt: string;
-  error?: {
-    message: string;
-    retryable: boolean;
-  };
-  safetyMode?: 'standard' | 'high_stakes' | 'crisis';
+type GuideState = {
+  phase: 'question' | 'choose' | 'birth' | 'confirm' | 'cast' | 'reading' | 'decided';
+  question: string | null;
+  topic: string | null;
+  horizon: number;
+  birth: Record<string, unknown>;
+  readings: number;
+  lean: Lean | null;
+  cast?: number[] | null;
+  mode?: Mode | null;
 };
 
-type Turn = {
+/** 起卦 (cast a hexagram) or 观命 (read the birth chart). */
+type Mode = 'gua' | 'ming';
+const MODE_LABELS: Record<Mode, string> = { gua: '起卦', ming: '观命' };
+
+type Message = {
   id: string;
-  userMessage: string;
-  createdAt: string;
-  responses: Reply[];
+  from: 'guide' | 'user';
+  text?: string;
+  card?: CardData;
+  streaming?: boolean;
+  error?: boolean;
 };
 
-type Decision = {
+type Birth = { date: string; time: string | null; gender: 'male' | 'female'; place?: string; longitude?: number };
+
+type DecisionRecord = {
   id: string;
-  title: string;
-  turns: Turn[];
-  status: 'active' | 'decided';
-  verdict: Verdict | null;
-  winner: Role | null;
-  createdAt: string;
-  updatedAt: string;
-  decidedAt: string | null;
+  question: string;
+  lean: Lean['lean'] | null;
+  choice: 'go' | 'stop';
+  days: string[];
+  at: string;
+  outcome?: 'good' | 'okay' | 'bad';
+  /** 本卦, or 本卦之之卦 when lines changed. */
+  gua?: string;
+  mode?: Mode;
 };
 
-type AgentStreamEvent =
-  | { type: 'meta'; safetyMode: 'standard' | 'high_stakes' | 'crisis' }
+type GuideEvent =
+  | { type: 'state'; state: GuideState }
+  | { type: 'profile'; birth: Birth }
+  | { type: 'say'; text: string }
+  | { type: 'card'; card: CardData }
+  | { type: 'start' }
   | { type: 'delta'; content: string }
+  | { type: 'end' }
   | { type: 'done' }
-  | { type: 'error'; code: string; message: string; retryable: boolean };
+  | { type: 'error'; message: string };
 
-class AgentClientError extends Error {
-  retryable: boolean;
+const GREETING = '夜阑人静\n君心有疑 不妨言之';
+const INITIAL_STATE: GuideState = {
+  phase: 'question',
+  question: null,
+  topic: null,
+  horizon: 3,
+  birth: {},
+  readings: 0,
+  lean: null,
+  cast: null,
+  mode: null,
+};
+const KEYS = { profile: 'siming.profile', session: 'siming.session', records: 'siming.records' };
+const OUTCOMES = { good: '顺', okay: '平', bad: '逆' } as const;
 
-  constructor(message: string, retryable = true) {
-    super(message);
-    this.name = 'AgentClientError';
-    this.retryable = retryable;
+type Verse = { key: string; echo: Message | null; items: Message[] };
+
+/** What is on screen: everything the guide said since the user last spoke. */
+function verseOf(messages: Message[]): Verse {
+  const lastUser = messages.map((message) => message.from).lastIndexOf('user');
+  const echo = lastUser >= 0 ? messages[lastUser] : null;
+  return { key: echo?.id ?? 'opening', echo, items: messages.slice(lastUser + 1) };
+}
+
+const LEAVE_MS = 700;
+
+const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+// The opening: a greeting, then the two ways in.
+const greetingMessages = (): Message[] => [
+  { id: newId(), from: 'guide', text: GREETING },
+  { id: newId(), from: 'guide', card: { kind: 'modes' } },
+];
+
+function load<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
   }
 }
 
-const poseAsset: Record<CharacterState, string> = {
-  idle: 'idle',
-  thinking: 'thinking',
-  speaking: 'speaking',
-  listening: 'thinking',
-  victory: 'victory',
-  defeat: 'defeat',
-};
-
-const stateLabel: Record<CharacterState, string> = {
-  idle: '漂浮待命',
-  thinking: '正在思考',
-  speaking: '正在发言',
-  listening: '正在倾听',
-  victory: '赢得本局',
-  defeat: '接受结果',
-};
-
-const roleCopy = {
-  angel: {
-    camp: 'YES',
-    name: '天使',
-    short: '看见值得迈出的一步',
-    summon: '召唤天使',
-  },
-  devil: {
-    camp: 'NO',
-    name: '恶魔',
-    short: '看清不该付出的代价',
-    summon: '召唤恶魔',
-  },
-} as const;
-
-function makeId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+function save(key: string, value: unknown) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage can be unavailable (private mode); the session still works in memory.
+  }
 }
 
-function now() {
-  return new Date().toISOString();
-}
-
-function browserStorage(): Storage | undefined {
-  try { return window.localStorage; } catch { return undefined; }
-}
-
-function formatHistoryDate(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
-}
-
-function CharacterFigure({ side, state, compact = false }: { side: Role; state: CharacterState; compact?: boolean }) {
-  const copy = roleCopy[side];
-
-  return (
-    <div
-      className={`character-figure character-figure--${side} character-figure--${state}${compact ? ' character-figure--compact' : ''}`}
-    >
-      <div className="character-aura" aria-hidden="true" />
-      <div className="character-rings" aria-hidden="true"><i /><i /><i /></div>
-      <div className="character-sprite character-sprite--single">
-        {/* oxlint-disable-next-line next/no-img-element -- transparent state artwork is served directly. */}
-        <img src={`/characters/hires/${side}-${poseAsset[state]}.png`} alt={`${copy.name} · ${stateLabel[state]}`} />
-      </div>
-    </div>
+function birthSummary(birth: Birth) {
+  const [year, month, day] = birth.date.split('-').map(Number);
+  return toHanNumerals(
+    `${year}年${month}月${day}日 ${birth.time ? `${'子丑寅卯辰巳午未申酉戌亥'[Math.floor((Number(birth.time.slice(0, 2)) + 1) / 2) % 12]}时` : '时辰不详'} ${birth.gender === 'male' ? '乾造' : '坤造'}${birth.place ? ` ${birth.place}` : ''}`,
   );
 }
 
-function StartScreen({
-  historyCount,
-  onHistory,
-  onStart,
-}: {
-  historyCount: number;
-  onHistory: () => void;
-  onStart: (question: string, role: Role) => void;
-}) {
-  const [question, setQuestion] = useState('');
-  const [showError, setShowError] = useState(false);
+function recordDate(at: string) {
+  const date = new Date(at);
+  return toHanNumerals(`${date.getMonth() + 1}月${date.getDate()}日`);
+}
 
-  function submitTo(role: Role) {
-    if (!question.trim()) {
-      setShowError(true);
-      return;
+export default function Page() {
+  const [messages, setMessages] = useState<Message[]>(greetingMessages);
+  const [state, setState] = useState<GuideState>(INITIAL_STATE);
+  const [profile, setProfile] = useState<Birth | null>(null);
+  const [records, setRecords] = useState<DecisionRecord[]>([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [panel, setPanel] = useState<'records' | 'profile' | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+  const [casting, setCasting] = useState<ChartCardData | null>(null);
+  // The coin-casting ritual: open while the user stills, throws and watches the hexagram form.
+  const [ritualOpen, setRitualOpen] = useState(false);
+  const [ritualGua, setRitualGua] = useState<GuaCardData | null>(null);
+  // After a decision, mist drifts over the painting once.
+  const [farewell, setFarewell] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [leaving, setLeaving] = useState<Verse | null>(null);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Let the current verse fade out while the next one inks in.
+  const fadeOut = useCallback((verse: Verse) => {
+    if (leaveTimer.current) clearTimeout(leaveTimer.current);
+    setLeaving(verse);
+    leaveTimer.current = setTimeout(() => setLeaving(null), LEAVE_MS);
+  }, []);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Browser storage is only readable after hydration.
+  useEffect(() => {
+    // oxlint-disable-next-line react/react-compiler
+    setProfile(load<Birth | null>(KEYS.profile, null));
+    setRecords(load<DecisionRecord[]>(KEYS.records, []));
+    const session = load<{ messages: Message[]; state: GuideState } | null>(KEYS.session, null);
+    if (session?.messages?.length) {
+      // The restored verse is brushed again from the first stroke.
+      setMessages(session.messages.filter((message) => !message.streaming));
+      setState(session.state);
     }
-    onStart(question.trim(), role);
-  }
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (hydrated && !busy) save(KEYS.session, { messages, state });
+  }, [messages, state, busy, hydrated]);
+
+  const scrolledOnce = useRef(false);
+  useEffect(() => {
+    if (!hydrated) return;
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: scrolledOnce.current ? 'smooth' : 'auto',
+    });
+    scrolledOnce.current = true;
+  }, [messages, hydrated]);
+
+  // While the guide is divining, drops keep falling near the centre.
+  useEffect(() => {
+    if (!busy || streaming) return;
+    const timer = setInterval(
+      () => dropOnWater(0.35 + Math.random() * 0.3, 0.5 + Math.random() * 0.25, 0.8),
+      1300,
+    );
+    return () => clearInterval(timer);
+  }, [busy, streaming]);
+
+  const mood: GuideMood = casting
+    ? 'divining'
+    : streaming
+    ? 'speaking'
+    : busy
+      ? 'divining'
+      : input.trim()
+        ? 'listening'
+        : state.phase === 'decided'
+          ? 'farewell'
+          : 'idle';
+
+  const send = useCallback(
+    async (body: { message?: string; action?: { type: string; choice?: string; birth?: BirthFormValue; tosses?: number[]; mode?: Mode } }, display?: string) => {
+      if (busy) return;
+      const history = messages
+        .filter((message) => message.text && !message.error)
+        .map((message) => ({ from: message.from, text: message.text! }));
+      if (display) {
+        dropOnWater(0.5, 0.9, 0.9);
+        fadeOut(verseOf(messages));
+        setMessages((current) => [...current, { id: newId(), from: 'user', text: display }]);
+      }
+      setBusy(true);
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+      let streamingId: string | null = null;
+      let spoke = false;
+      let pickedDays: string[] = [];
+
+      const apply = (event: GuideEvent) => {
+        switch (event.type) {
+          case 'state':
+            setState(event.state);
+            break;
+          case 'profile':
+            setProfile(event.birth);
+            save(KEYS.profile, event.birth);
+            break;
+          case 'say':
+            if (!spoke) dropOnWater(0.5, 0.62, 0.9);
+            spoke = true;
+            setMessages((current) => [...current, { id: newId(), from: 'guide', text: event.text }]);
+            break;
+          case 'card':
+            if (event.card.kind === 'gua') setRitualGua(event.card);
+            if (event.card.kind === 'days') pickedDays = event.card.days.map((day) => day.date);
+            if (event.card.kind === 'chart' && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+              setCasting(event.card);
+            }
+            setMessages((current) => [...current, { id: newId(), from: 'guide', card: event.card }]);
+            break;
+          case 'start': {
+            if (!spoke) dropOnWater(0.5, 0.62, 0.9);
+            spoke = true;
+            const id = newId();
+            streamingId = id;
+            setStreaming(true);
+            setMessages((current) => [...current, { id, from: 'guide', text: '', streaming: true }]);
+            break;
+          }
+          case 'delta': {
+            const id = streamingId;
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === id ? { ...message, text: (message.text ?? '') + event.content } : message,
+              ),
+            );
+            break;
+          }
+          case 'end': {
+            const id = streamingId;
+            streamingId = null;
+            setStreaming(false);
+            setMessages((current) =>
+              current.map((message) => (message.id === id ? { ...message, streaming: false } : message)),
+            );
+            break;
+          }
+          case 'error':
+            setMessages((current) => [...current, { id: newId(), from: 'guide', text: event.message, error: true }]);
+            break;
+        }
+      };
+
+      try {
+        const response = await fetch('/api/guide', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, state, profile, history }),
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          apply({ type: 'error', message: payload?.error ?? '灯灭了一瞬，请再说一次。' });
+          return;
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split('\n\n');
+          buffer = chunks.pop() ?? '';
+          for (const chunk of chunks) {
+            if (!chunk.startsWith('data:')) continue;
+            apply(JSON.parse(chunk.slice(5)) as GuideEvent);
+          }
+        }
+        if (body.action?.type === 'decide' && state.question) {
+          setFarewell(true);
+          const lastGua = [...messages].reverse().find((message) => message.card?.kind === 'gua')?.card;
+          const record: DecisionRecord = {
+            id: newId(),
+            question: state.question,
+            lean: state.lean?.lean ?? null,
+            choice: body.action.choice === 'go' ? 'go' : 'stop',
+            days: pickedDays,
+            at: new Date().toISOString(),
+            mode: state.mode ?? undefined,
+            gua:
+              lastGua?.kind === 'gua'
+                ? `${lastGua.present.name}${lastGua.future ? `之${lastGua.future.name}` : ''}`
+                : undefined,
+          };
+          setRecords((current) => {
+            const next = [record, ...current].slice(0, 50);
+            save(KEYS.records, next);
+            return next;
+          });
+        }
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') {
+          apply({ type: 'error', message: '连不上了，请稍后再说一次。' });
+        }
+      } finally {
+        setBusy(false);
+        setStreaming(false);
+        abortRef.current = null;
+      }
+    },
+    [busy, messages, profile, state, fadeOut],
+  );
+
+  const submit = () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput('');
+    void send({ message: text }, text);
+  };
+
+  const restart = () => {
+    abortRef.current?.abort();
+    fadeOut(verseOf(messages));
+    setMessages(greetingMessages());
+    setState(INITIAL_STATE);
+    setInput('');
+  };
+
+  const forgetProfile = () => {
+    save(KEYS.profile, null);
+    setProfile(null);
+    setPanel(null);
+    restart();
+  };
+
+  const markOutcome = (id: string, outcome: DecisionRecord['outcome']) => {
+    setRecords((current) => {
+      const next = current.map((record) => (record.id === id ? { ...record, outcome } : record));
+      save(KEYS.records, next);
+      return next;
+    });
+  };
+
+  const verse = verseOf(messages);
+  const lastBirthCardId = [...messages]
+    .reverse()
+    .find((message) => message.card?.kind === 'birth' || message.card?.kind === 'birth-form')?.id;
+  const canDecide = state.phase === 'reading' && !busy;
+  const goLabel =
+    state.lean?.lean === 'wait' && state.lean.until ? `待到${monthText(state.lean.until)}再行` : '行';
 
   return (
-    <main className="start-shell">
-      <AppHeader room="01" historyCount={historyCount} onHistory={onHistory} />
+    <main className="shell">
+      <InkScene />
 
-      <section className="opening-stage" aria-label="决策舞台">
-        <h1 className="sr-only">Angel & Devil 决策舞台</h1>
-        <div className="intro-character intro-character--angel">
-          <CharacterFigure side="angel" state="idle" />
-          <CharacterCaption side="angel" />
+      <header className="topbar">
+        <button type="button" className="brand" onClick={restart} aria-label="开始新的问事">
+          <span className="brand-mark" aria-hidden="true" />
+          <span>司命<small>问时</small></span>
+        </button>
+        <nav>
+          <button type="button" className="icon-button" onClick={() => setPanel('records')} aria-label="回看">
+            录
+          </button>
+          <button type="button" className="icon-button" onClick={() => setPanel('profile')} aria-label="我的生辰">
+            辰
+          </button>
+        </nav>
+      </header>
+
+      <section className="stage">
+        <div className="stage-guide">
+          <Guide mood={mood} />
         </div>
 
-        <div className="intro-character intro-character--devil">
-          <CharacterFigure side="devil" state="idle" />
-          <CharacterCaption side="devil" />
-        </div>
-
-        <div className="opening-dock" id="decision">
-          <div className="opening-dock__meta">
-            <label htmlFor="decision-question"><Sparkles /> 写下你正在犹豫的事</label>
-            <span>选一个角色，先听他的看法</span>
+        <div className="verse-area">
+          <div className="verse-stack">
+            <div className="verse-scroll" ref={scrollRef} aria-live="polite">
+              <VerseView
+                key={verse.key}
+                verse={verse}
+                entering={Boolean(leaving)}
+                birthActive={(id) =>
+                  id === lastBirthCardId && (state.phase === 'confirm' || state.phase === 'birth') && !busy
+                }
+                thinking={busy}
+                paused={ritualOpen}
+                castActive={state.phase === 'cast' && !busy}
+                modesActive={(state.phase === 'question' || state.phase === 'choose' || state.phase === 'decided') && !busy}
+                onPickMode={(mode) => void send({ action: { type: 'mode', mode } }, MODE_LABELS[mode])}
+                onStartCast={() => {
+                  setRitualGua(null);
+                  setRitualOpen(true);
+                }}
+                onConfirm={() => void send({ action: { type: 'confirm_birth' } }, '是的')}
+                onEdit={() => void send({ action: { type: 'edit_birth' } }, '要改')}
+                onBirthSubmit={(birth, summary) => void send({ action: { type: 'submit_birth', birth } }, summary)}
+              />
+            </div>
+            {leaving && (
+              <div className="verse-leaving" aria-hidden="true">
+                <VerseView verse={leaving} entering={false} instant birthActive={() => false} thinking={false} />
+              </div>
+            )}
           </div>
-          <div className="opening-dock__controls">
-            <Textarea
-              id="decision-question"
-              value={question}
-              onChange={(event) => {
-                setQuestion(event.target.value);
-                if (showError) setShowError(false);
+
+          <div className="whisper">
+            {canDecide && (
+              <div className="decide">
+                <button
+                  type="button"
+                  className="decide-go"
+                  onClick={() => void send({ action: { type: 'decide', choice: 'go' } }, goLabel)}
+                >
+                  {goLabel}
+                </button>
+                <span className="decide-or" aria-hidden="true">或</span>
+                <button
+                  type="button"
+                  className="decide-stop"
+                  onClick={() => void send({ action: { type: 'decide', choice: 'stop' } }, '止')}
+                >
+                  止
+                </button>
+              </div>
+            )}
+            <form
+              className="answer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submit();
               }}
-              placeholder="例如：要不要接受一个很有挑战的新项目？"
-              rows={1}
-              aria-invalid={showError}
-              aria-describedby={showError ? 'decision-question-error' : undefined}
-            />
-            <Button type="button" className="dock-role dock-role--angel" onClick={() => submitTo('angel')}><Feather /> 对话天使</Button>
-            <Button type="button" className="dock-role dock-role--devil" onClick={() => submitTo('devil')}><Flame /> 对话恶魔</Button>
+            >
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    submit();
+                  }
+                }}
+                rows={1}
+                maxLength={500}
+                placeholder={
+                  state.phase === 'reading'
+                    ? state.mode === 'ming'
+                      ? '还想问什么？比如「看半年」'
+                      : '还想问什么？'
+                    : state.phase === 'birth' || state.phase === 'confirm'
+                      ? '于生辰帖上择定即可'
+                      : state.phase === 'choose'
+                        ? '择一而观，或直言「起卦」「观命」'
+                        : state.phase === 'cast'
+                          ? '心有所问 先掷其钱'
+                          : '说说让你拿不定主意的事…'
+                }
+                aria-label="对司命说"
+              />
+              <button type="submit" className="answer-send" disabled={!input.trim() || busy} aria-label="说出">
+                答
+              </button>
+            </form>
+            <p className="footnote">命理只是看问题的一个角度，决定在你。</p>
           </div>
-          {showError ? <p className="opening-dock__error" id="decision-question-error" role="alert">先写下你要决定的事。</p> : null}
         </div>
       </section>
+
+      {casting && <ChartCasting card={casting} onDone={() => setCasting(null)} />}
+      {ritualOpen && (
+        <CastRitual
+          gua={ritualGua}
+          onCast={(tosses) => void send({ action: { type: 'cast', tosses } }, '掷钱六次')}
+          onClose={() => setRitualOpen(false)}
+        />
+      )}
+      {farewell && (
+        <video
+          className="scene-moment"
+          src="/videos/farewell.mp4"
+          autoPlay
+          muted
+          playsInline
+          onEnded={() => setFarewell(false)}
+          onError={() => setFarewell(false)}
+        />
+      )}
+
+      {panel && (
+        <>
+          <button type="button" className="drawer-backdrop" onClick={() => setPanel(null)} aria-label="关闭" />
+          <aside className="drawer" aria-label={panel === 'records' ? '回看' : '我的生辰'}>
+            <div className="drawer-head">
+              <h2>{panel === 'records' ? '所问之录' : '生辰'}</h2>
+              <button type="button" className="icon-button" onClick={() => setPanel(null)} aria-label="关闭">
+                收
+              </button>
+            </div>
+            {panel === 'profile' ? (
+              profile ? (
+                <div className="drawer-body">
+                  <p className="profile-line">{birthSummary(profile)}</p>
+                  <p className="muted">生辰只存于此机，用以推演，不作他用。</p>
+                  <button type="button" className="ink-link" onClick={forgetProfile}>
+                    忘却生辰
+                  </button>
+                </div>
+              ) : (
+                <div className="drawer-body">
+                  <p className="muted">尚未记下生辰。观命之时，司命自会相问。</p>
+                </div>
+              )
+            ) : (
+              <div className="drawer-body">
+                {records.length === 0 && <p className="muted">尚无所问。</p>}
+                <ul className="records">
+                  {records.map((record) => (
+                    <li key={record.id}>
+                      <p className="record-question">{record.question}</p>
+                      <span className={`record-choice ${record.choice === 'go' ? 'is-go' : ''}`} aria-label={record.choice === 'go' ? '择行' : '择止'}>
+                        {record.choice === 'go' ? '行' : '止'}
+                      </span>
+                      <p className="record-meta">
+                        {recordDate(record.at)}
+                        {record.mode ? ` · ${MODE_LABELS[record.mode]}` : ''}
+                        {record.gua ? ` · ${record.gua}` : ''}
+                        {record.lean ? ` · ${{ go: '宜行', wait: '待时', stop: '宜止' }[record.lean]}` : ''}
+                      </p>
+                      <div className="record-outcome">
+                        <span>其后</span>
+                        {(Object.keys(OUTCOMES) as Array<keyof typeof OUTCOMES>).map((key) => (
+                          <button
+                            key={key}
+                            type="button"
+                            className={`record-mark ${record.outcome === key ? 'is-on' : ''}`}
+                            onClick={() => markOutcome(record.id, key)}
+                          >
+                            {OUTCOMES[key]}
+                          </button>
+                        ))}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <button type="button" className="ink-link drawer-restart" onClick={() => { setPanel(null); restart(); }}>
+              另问一事
+            </button>
+          </aside>
+        </>
+      )}
     </main>
   );
 }
 
-function AppHeader({
-  room = '01',
-  title,
-  turnCount,
-  historyCount = 0,
-  onDecide,
-  onHistory,
+/**
+ * One question (or reading) at a time, centred. The guide's words are
+ * brush-written in vertical columns; any cards follow once the writing ends.
+ */
+function VerseView({
+  verse,
+  entering,
+  birthActive,
+  thinking,
+  paused = false,
+  castActive = false,
+  onStartCast = () => {},
+  modesActive = false,
+  onPickMode = () => {},
+  instant = false,
+  onConfirm = () => {},
+  onEdit = () => {},
+  onBirthSubmit = () => {},
 }: {
-  room?: string;
-  title?: string;
-  turnCount?: number;
-  historyCount?: number;
-  onDecide?: () => void;
-  onHistory?: () => void;
+  verse: Verse;
+  entering: boolean;
+  birthActive: (id: string) => boolean;
+  thinking: boolean;
+  /** Hold the brush while the casting ritual covers the page. */
+  paused?: boolean;
+  castActive?: boolean;
+  onStartCast?: () => void;
+  modesActive?: boolean;
+  onPickMode?: (mode: Mode) => void;
+  instant?: boolean;
+  onConfirm?: () => void;
+  onEdit?: () => void;
+  onBirthSubmit?: (birth: BirthFormValue, summary: string) => void;
 }) {
-  return (
-    <header className="site-header">
-      <a href="#main" className="brand" aria-label="Angel & Devil">
-        <span className="brand-mark"><Feather /></span>
-        <span>ANGEL <i>&</i> DEVIL</span>
-      </a>
-      {title ? (
-        <div className="decision-heading">
-          <small>当前决策</small>
-          <strong>{title}</strong>
-        </div>
-      ) : null}
-      <div className="header-actions">
-        {turnCount ? <span className="turn-count">TURN {String(turnCount).padStart(2, '0')}</span> : null}
-        {onHistory ? (
-          <Button onClick={onHistory} className="history-button" variant="ghost">
-            <HistoryIcon /> 历史{historyCount ? <span>{historyCount}</span> : null}
-          </Button>
-        ) : null}
-        {onDecide ? <Button onClick={onDecide} className="decide-button"><Gavel /> 作出决定</Button> : null}
-        {!title ? <div className="round-badge"><span>DECISION ROOM</span><strong>{room}</strong></div> : null}
-      </div>
-    </header>
-  );
-}
+  const [written, setWritten] = useState(instant);
+  const textMessages = verse.items.filter((message) => !message.card && message.text?.trim());
+  const text = textMessages
+    .map((message) =>
+      (message.text ?? '')
+        .split(/\n+/)
+        .map((paragraph) => paragraph.trim())
+        .filter(Boolean)
+        .join('\n\n'),
+    )
+    .join('\n\n');
+  const streaming = verse.items.some((message) => message.streaming);
+  const failed = textMessages.some((message) => message.error);
+  // The chart only feeds the casting animation; it isn't laid out as a card.
+  const cards = verse.items.filter((message) => message.card && message.card.kind !== 'chart');
+  const showCards = (written || !text) && cards.length > 0;
+  const cardsRef = useRef<HTMLDivElement>(null);
 
-function CharacterCaption({ side }: { side: Role }) {
-  const copy = roleCopy[side];
-  return (
-    <div className={`character-caption character-caption--${side}`}>
-      <span>{copy.camp}</span>
-      <strong>{copy.name}</strong>
-      <small>{copy.short}</small>
-    </div>
-  );
-}
-
-function CharacterPanel({
-  side,
-  state,
-  reply,
-  turnId,
-  isThinking,
-  onRetry,
-}: {
-  side: Role;
-  state: CharacterState;
-  reply: Reply | null;
-  turnId: string | null;
-  isThinking: boolean;
-  onRetry: (turnId: string, replyId: string) => void;
-}) {
-  const copy = roleCopy[side];
-  const bubbleRef = useRef<HTMLDivElement>(null);
-
+  // Cards arrive after the brush stops; bring them into view on small screens.
   useEffect(() => {
-    if (reply?.status === 'streaming') bubbleRef.current?.scrollTo({ top: bubbleRef.current.scrollHeight });
-  }, [reply?.content, reply?.status]);
+    if (showCards && !instant) cardsRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [showCards, instant]);
 
   return (
-    <section className={`character-panel character-panel--${side} is-${state}`} aria-label={`${copy.name}，当前${stateLabel[state]}`}>
-      <span className="panel-state"><i /> {stateLabel[state]}</span>
-      <CharacterFigure side={side} state={state} />
-      <CharacterCaption side={side} />
-      <div className={`speech-bubble speech-bubble--${side}${reply?.status === 'streaming' ? ' is-streaming' : ''}`} aria-live="polite">
-        <div className="speech-bubble__content" ref={bubbleRef}>
-          <div className="speech-bubble__head">
-            <span>{side === 'angel' ? <Feather /> : <Flame />}{reply?.safetyMode === 'crisis' ? '安全支持' : copy.name}</span>
-            <small>{copy.camp}</small>
-          </div>
-          {reply?.content ? <p>{reply.content}</p> : isThinking ? (
-            <div className="speech-bubble__thinking"><i /><i /><i /> 正在整理想法…</div>
-          ) : <p className="speech-bubble__placeholder">还没轮到我发言。想听我的看法，就点下方按钮。</p>}
-          {reply?.status === 'error' ? (
-            <div className="speech-bubble__error" role="alert">
-              <span>{reply.error?.message || '这次回复中断了。'}</span>
-              {reply.error?.retryable && turnId ? <button type="button" onClick={() => onRetry(turnId, reply.id)}><RotateCcw /> 重试</button> : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function Conversation({
-  turns,
-  activeReplyId,
-  onRetry,
-}: {
-  turns: Turn[];
-  activeReplyId: string | null;
-  onRetry: (turnId: string, replyId: string) => void;
-}) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const activeReply = turns
-    .flatMap((turn) => turn.responses)
-    .find((reply) => reply.id === activeReplyId);
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [turns, activeReplyId]);
-
-  return (
-    <div className="conversation-scroll" ref={scrollRef} aria-live="polite">
-      <div className="conversation-intro">
-        <Swords />
-        <span>双方共享完整对话，但立场始终相反</span>
-      </div>
-      {turns.map((turn, turnIndex) => (
-        <section className="turn-group" key={turn.id} aria-labelledby={`${turn.id}-title`}>
-          <div className="turn-divider"><span id={`${turn.id}-title`}>TURN {String(turnIndex + 1).padStart(2, '0')}</span><i /></div>
-          <div className="user-message">
-            <small>你的补充</small>
-            <p>{turn.userMessage}</p>
-          </div>
-          <div className="responses">
-            {turn.responses.map((reply) =>
-              reply.content || reply.status === 'error' ? (
-                <article
-                  className={`agent-message agent-message--${reply.role}${reply.status === 'streaming' ? ' is-streaming' : ''}${reply.safetyMode === 'crisis' ? ' is-safety' : ''}`}
-                  key={reply.id}
-                >
-                  <div className="message-role">
-                    <span>{reply.role === 'angel' ? <Feather /> : <Flame />}</span>
-                    <strong>{reply.safetyMode === 'crisis' ? '安全支持' : roleCopy[reply.role].name}</strong>
-                    <small>{reply.safetyMode === 'crisis' ? 'SAFETY FIRST' : roleCopy[reply.role].camp}</small>
-                  </div>
-                  {reply.content ? <p>{reply.content}</p> : null}
-                  {reply.status === 'error' ? (
-                    <div className="reply-error" role="alert">
-                      <span>{reply.error?.message || '这次回复中断了。'}</span>
-                      {reply.error?.retryable ? (
-                        <button type="button" onClick={() => onRetry(turn.id, reply.id)}>
-                          <RotateCcw /> 重试
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </article>
-              ) : null,
-            )}
-            {activeReply && !activeReply.content && turn.responses.some((reply) => reply.id === activeReply.id) ? (
-              <div className={`thinking-message thinking-message--${activeReply.role}`}>
-                <span /><span /><span /> {roleCopy[activeReply.role].name}正在整理观点
-              </div>
-            ) : null}
-          </div>
-        </section>
-      ))}
-    </div>
-  );
-}
-
-function Composer({ disabled, onSummon, onNewTurn, onHistory, onDecide }: { disabled: boolean; onSummon: (role: Role) => void; onNewTurn: (message: string, role: Role) => void; onHistory: () => void; onDecide: () => void }) {
-  const [draft, setDraft] = useState('');
-
-  function submitTo(role: Role) {
-    if (draft.trim()) {
-      onNewTurn(draft.trim(), role);
-      setDraft('');
-    } else {
-      onSummon(role);
-    }
-  }
-
-  return (
-    <div className="dialogue-dock">
-      <div className="dialogue-dock__meta">
-        <span><Sparkles /> 你想听谁说？<small>{draft.trim() ? '这句补充会开启新的一轮' : '不输入也可以直接继续对话'}</small></span>
-        <div>
-          <button type="button" onClick={onHistory}><MessageCircleMore /> 对话记录</button>
-          <button type="button" onClick={onDecide} className="dock-decide"><Gavel /> 作出决定</button>
-        </div>
-      </div>
-      <div className="dialogue-dock__controls">
-        <Textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          placeholder="补充一句（可选）…"
-          aria-label="补充信息，可选"
-          disabled={disabled}
-          rows={1}
+    <div
+      className={`verse ${entering ? 'is-entering' : ''} ${failed ? 'is-error' : ''} ${cards.length ? 'has-cards' : ''}`}
+    >
+      {text && (
+        <InkWriting
+          text={text}
+          streaming={streaming}
+          instant={instant}
+          hold={thinking || paused}
+          startDelay={entering ? 520 : 0}
+          onDone={() => setWritten(true)}
         />
-        <Button onClick={() => submitTo('angel')} disabled={disabled} className="dock-role dock-role--angel"><Feather /> 对话天使</Button>
-        <Button onClick={() => submitTo('devil')} disabled={disabled} className="dock-role dock-role--devil"><Flame /> 对话恶魔</Button>
-      </div>
-    </div>
-  );
-}
-
-function ResultOverlay({ decision, onRestart }: { decision: Decision; onRestart: () => void }) {
-  const winner: Role = decision.verdict === 'yes' ? 'angel' : 'devil';
-  const loser: Role = winner === 'angel' ? 'devil' : 'angel';
-  const allReplies = decision.turns
-    .flatMap((turn) => turn.responses)
-    .filter((reply) => reply.status === 'complete');
-  const angelCount = allReplies.filter((reply) => reply.role === 'angel').length;
-  const devilCount = allReplies.filter((reply) => reply.role === 'devil').length;
-
-  return (
-    <dialog open className={`result-overlay result-overlay--${winner}`} aria-labelledby="result-title">
-      <div className="result-rays" aria-hidden="true" />
-      <div className="result-particles" aria-hidden="true">{Array.from({ length: 18 }, (_, i) => <i key={i} style={{ '--i': i } as React.CSSProperties} />)}</div>
-      <div className="result-loser"><CharacterFigure side={loser} state="defeat" compact /></div>
-      <div className="result-winner"><CharacterFigure side={winner} state="victory" /></div>
-      <section className="result-card">
-        <span className="result-kicker">FINAL VERDICT · {decision.verdict?.toUpperCase()}</span>
-        <h2 id="result-title">{roleCopy[winner].name}<em>赢得了这一局</em></h2>
-        <p>{decision.verdict === 'yes' ? '你选择了向前一步。带上边界，也带上勇气。' : '你选择了暂不行动。保护精力，也是清醒的决定。'}</p>
-        <div className="result-stats">
-          <div><Feather /><span>天使发言</span><strong>{angelCount}</strong></div>
-          <i />
-          <div><Flame /><span>恶魔发言</span><strong>{devilCount}</strong></div>
+      )}
+      {/* The brush waits for the whole reply so its layout is final before the first stroke. */}
+      {thinking && (
+        <div className="verse-thinking" aria-label="司命正在推演">
+          <span />
+          <span />
+          <span />
         </div>
-        <Button onClick={onRestart} className="restart-button"><RotateCcw /> 开始新的决策</Button>
-      </section>
-    </dialog>
-  );
-}
-
-function HistoryDialog({
-  decisions,
-  open,
-  onOpenChange,
-  onOpenDecision,
-}: {
-  decisions: Decision[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onOpenDecision: (decision: Decision) => void;
-}) {
-  const stats = summarizeDecisionHistory(decisions);
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="history-dialog">
-        <DialogHeader>
-          <span className="dialog-kicker"><HistoryIcon /> DECISION ARCHIVE</span>
-          <DialogTitle>你的决策记录</DialogTitle>
-          <DialogDescription>每次对话和最终选择都会自动保存，使用此浏览器可继续查看。</DialogDescription>
-        </DialogHeader>
-
-        <section className="career-stats" aria-label="胜负统计">
-          <div className="career-stat career-stat--total">
-            <HistoryIcon />
-            <span>总决策<small>{stats.active ? `${stats.active} 局进行中` : '全部已结算'}</small></span>
-            <strong>{stats.total}</strong>
-          </div>
-          <div className="career-stat career-stat--angel">
-            <Feather />
-            <span>天使胜场<small>{stats.decided ? `胜率 ${stats.angelWinRate}%` : '尚无战绩'}</small></span>
-            <strong>{stats.angelWins}</strong>
-          </div>
-          <div className="career-stat career-stat--devil">
-            <Flame />
-            <span>恶魔胜场<small>{stats.decided ? `胜率 ${stats.devilWinRate}%` : '尚无战绩'}</small></span>
-            <strong>{stats.devilWins}</strong>
-          </div>
-        </section>
-
-        <div className="history-section-heading">
-          <span><Clock3 /> 历史会话</span>
-          <small>{stats.decided} 局已结算</small>
-        </div>
-
-        <div className="history-list">
-          {decisions.length ? (
-            decisions.map((item) => {
-              const replyCount = item.turns
-                .flatMap((turn) => turn.responses)
-                .filter((reply) => reply.status === 'complete').length;
-              const winner = item.verdict === 'yes' ? 'angel' : item.verdict === 'no' ? 'devil' : null;
-
-              return (
-                <button
-                  type="button"
-                  className={`history-item${winner ? ` history-item--${winner}` : ''}`}
-                  key={item.id}
-                  onClick={() => onOpenDecision(item)}
-                >
-                  <span className="history-item-icon">
-                    {winner === 'angel' ? <Feather /> : winner === 'devil' ? <Flame /> : <Clock3 />}
-                  </span>
-                  <span className="history-item-copy">
-                    <strong>{item.title}</strong>
-                    <small>{formatHistoryDate(item.updatedAt)} · {item.turns.length} Turns · {replyCount} 条回复</small>
-                  </span>
-                  <span className={`history-status${winner ? ` history-status--${winner}` : ''}`}>
-                    {winner ? <Trophy /> : null}
-                    {winner === 'angel' ? 'YES' : winner === 'devil' ? 'NO' : '进行中'}
-                  </span>
-                  <ChevronRight />
+      )}
+      {showCards && (
+        <div className="verse-cards" ref={cardsRef}>
+          {cards.map(({ id, card }) => (
+            <div key={id} className="verse-card">
+              {card?.kind === 'birth-form' && (
+                <BirthForm card={card} active={birthActive(id)} onSubmit={onBirthSubmit} />
+              )}
+              {card?.kind === 'birth' && (
+                <BirthCard card={card} active={birthActive(id)} onConfirm={onConfirm} onEdit={onEdit} />
+              )}
+              {card?.kind === 'days' && <DaysCard card={card} />}
+              {card?.kind === 'modes' && (
+                <div className="mode-choice">
+                  <button type="button" className="mode-seal" disabled={!modesActive} onClick={() => onPickMode('gua')}>
+                    起卦
+                    <small>一事一问 掷钱成卦</small>
+                  </button>
+                  <button type="button" className="mode-seal is-light" disabled={!modesActive} onClick={() => onPickMode('ming')}>
+                    观命
+                    <small>依其生辰 观其时运</small>
+                  </button>
+                </div>
+              )}
+              {card?.kind === 'cast' && (
+                <button type="button" className="cast-invite" disabled={!castActive} onClick={onStartCast}>
+                  起卦
                 </button>
-              );
-            })
-          ) : (
-            <div className="history-empty">
-              <HistoryIcon />
-              <strong>还没有决策记录</strong>
-              <span>开启第一局后，对话会自动出现在这里。</span>
+              )}
+              {card?.kind === 'gua' && (
+                <div className="verse-gua">
+                  <GuaFigure tosses={card.tosses} size={64} />
+                  <p>
+                    {card.present.name}
+                    {card.future && `之${card.future.name}`}
+                  </p>
+                </div>
+              )}
             </div>
-          )}
+          ))}
         </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export default function Home() {
-  const [decision, setDecision] = useState<Decision | null>(null);
-  const [history, setHistory] = useState<Decision[]>([]);
-  const [isHydrated, setIsHydrated] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [storageError, setStorageError] = useState(false);
-  const [databaseReady, setDatabaseReady] = useState(false);
-  const [databaseError, setDatabaseError] = useState<string | null>(null);
-  const [thinkingRole, setThinkingRole] = useState<Role | null>(null);
-  const [activeReplyId, setActiveReplyId] = useState<string | null>(null);
-  const [isReceiving, setIsReceiving] = useState(false);
-  const [lastSpeaker, setLastSpeaker] = useState<Role | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [transcriptOpen, setTranscriptOpen] = useState(false);
-  const activeRequestRef = useRef<{ id: string; controller: AbortController } | null>(null);
-  const speakerHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const historySaveRef = useRef<Promise<void>>(Promise.resolve());
-  const historyLoadRef = useRef<Promise<{ decisions: Decision[]; currentDecisionId: string | null }> | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function restore() {
-      let snapshot;
-      try {
-        historyLoadRef.current ??= loadDatabaseHistory(browserStorage());
-        snapshot = await historyLoadRef.current;
-        if (cancelled) return;
-        setDatabaseReady(true);
-      } catch (error) {
-        snapshot = loadDecisionHistory(browserStorage());
-        if (cancelled) return;
-        setDatabaseError(error instanceof Error ? error.message : '暂时无法读取对话记录。');
-      }
-      setHistory(snapshot.decisions as Decision[]);
-      setDecision(snapshot.decisions.find((item: Decision) => item.id === snapshot.currentDecisionId) || null);
-      setIsHydrated(true);
-    }
-    void restore();
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    if (!isHydrated) return;
-    if (decision && history.find((item) => item.id === decision.id) !== decision) {
-      queueMicrotask(() => {
-        setHistory((current) => upsertDecisionHistory(current, decision) as Decision[]);
-      });
-      return;
-    }
-
-    const saved = saveDecisionHistory(browserStorage(), {
-      decisions: history,
-      currentDecisionId: decision && !decision.verdict ? decision.id : null,
-    });
-    queueMicrotask(() => setStorageError(!saved));
-    if (databaseReady && !thinkingRole) {
-      const update = { decision, currentDecisionId: decision && !decision.verdict ? decision.id : null };
-      historySaveRef.current = historySaveRef.current.then(async () => {
-        try {
-          await saveDatabaseHistory(update);
-          setDatabaseError(null);
-        } catch (error) {
-          setDatabaseError(error instanceof Error ? error.message : '暂时无法保存对话记录。');
-        }
-      });
-    }
-  }, [decision, history, isHydrated, databaseReady, thinkingRole]);
-
-  async function retryDatabaseSave() {
-    const snapshot = {
-      decisions: decision ? upsertDecisionHistory(history, decision) as Decision[] : history,
-      currentDecisionId: decision && !decision.verdict ? decision.id : null,
-    };
-    historySaveRef.current = historySaveRef.current.then(async () => {
-      try {
-        // Establish a session and finish any interrupted legacy import first.
-        await loadDatabaseHistory(browserStorage());
-        for (const item of snapshot.decisions) {
-          await saveDatabaseHistory({ decision: item, currentDecisionId: null });
-        }
-        await saveDatabaseHistory({ decision: null, currentDecisionId: snapshot.currentDecisionId });
-        setDatabaseReady(true);
-        setDatabaseError(null);
-      } catch (error) {
-        setDatabaseError(error instanceof Error ? error.message : '暂时无法保存对话记录。');
-      }
-    });
-  }
-
-  useEffect(() => () => {
-    activeRequestRef.current?.controller.abort();
-    if (speakerHoldTimerRef.current) clearTimeout(speakerHoldTimerRef.current);
-  }, []);
-
-  function clearSpeakerHold() {
-    if (speakerHoldTimerRef.current) clearTimeout(speakerHoldTimerRef.current);
-    speakerHoldTimerRef.current = null;
-    setLastSpeaker(null);
-  }
-
-  function holdLastSpeaker(role: Role) {
-    if (speakerHoldTimerRef.current) clearTimeout(speakerHoldTimerRef.current);
-    setLastSpeaker(role);
-    speakerHoldTimerRef.current = setTimeout(() => {
-      setLastSpeaker((current) => (current === role ? null : current));
-      speakerHoldTimerRef.current = null;
-    }, 1400);
-  }
-
-  function abortActiveRequest() {
-    const activeRequest = activeRequestRef.current;
-    activeRequestRef.current = null;
-    activeRequest?.controller.abort();
-  }
-
-  function updateReply(replyId: string, updater: (reply: Reply) => Reply) {
-    setDecision((current) => {
-      if (!current || current.verdict) return current;
-      return {
-        ...current,
-        updatedAt: now(),
-        turns: current.turns.map((turn) => ({
-          ...turn,
-          responses: turn.responses.map((reply) =>
-            reply.id === replyId ? updater(reply) : reply,
-          ),
-        })),
-      };
-    });
-  }
-
-  function markReplyFailed(replyId: string, message: string, retryable: boolean) {
-    updateReply(replyId, (reply) => ({
-      ...reply,
-      status: 'error',
-      error: { message, retryable },
-    }));
-  }
-
-  async function requestReply(
-    role: Role,
-    sourceDecision: Decision,
-    replyId: string,
-  ) {
-    abortActiveRequest();
-    const requestId = makeId('request');
-    const controller = new AbortController();
-    activeRequestRef.current = { id: requestId, controller };
-    clearSpeakerHold();
-    setThinkingRole(role);
-    setActiveReplyId(replyId);
-    setIsReceiving(false);
-
-    const isCurrentRequest = () => activeRequestRef.current?.id === requestId;
-
-    try {
-      await historySaveRef.current;
-      if (!isCurrentRequest()) return;
-      const response = await fetch('/api/agent', {
-        method: 'POST',
-        headers: {
-          Accept: 'text/event-stream',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          role,
-          decision: sourceDecision,
-          replyId,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string; retryable?: boolean } | null;
-        throw new AgentClientError(
-          payload?.error || '无法开始这次回复。',
-          payload?.retryable === true || response.status >= 500,
-        );
-      }
-      if (!response.body) throw new AgentClientError('服务器没有返回可读的内容。');
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let finished = false;
-
-      const handleEvent = (event: AgentStreamEvent) => {
-        if (!isCurrentRequest()) return;
-        if (event.type === 'meta') {
-          updateReply(replyId, (reply) => ({ ...reply, safetyMode: event.safetyMode }));
-        } else if (event.type === 'delta' && event.content) {
-          setIsReceiving(true);
-          updateReply(replyId, (reply) => ({
-            ...reply,
-            content: `${reply.content}${event.content}`,
-          }));
-        } else if (event.type === 'error') {
-          throw new AgentClientError(event.message, event.retryable);
-        } else if (event.type === 'done') {
-          finished = true;
-        }
-      };
-
-      while (isCurrentRequest()) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
-          if (!data) continue;
-          handleEvent(JSON.parse(data) as AgentStreamEvent);
-        }
-      }
-
-      if (!isCurrentRequest()) return;
-      if (!finished) throw new AgentClientError('连接在回复完成前中断了。');
-      updateReply(replyId, (reply) => ({ ...reply, status: 'complete', error: undefined }));
-      holdLastSpeaker(role);
-    } catch (error) {
-      if (!isCurrentRequest() || controller.signal.aborted) return;
-      const clientError =
-        error instanceof AgentClientError
-          ? error
-          : new AgentClientError('这次回复中断了，可以保留当前对话后重试。');
-      markReplyFailed(replyId, clientError.message, clientError.retryable);
-    } finally {
-      if (isCurrentRequest()) {
-        activeRequestRef.current = null;
-        setThinkingRole(null);
-        setActiveReplyId(null);
-        setIsReceiving(false);
-      }
-    }
-  }
-
-  function appendReply(sourceDecision: Decision, turnId: string, role: Role) {
-    const replyId = makeId('reply');
-    const createdAt = now();
-    const nextDecision: Decision = {
-      ...sourceDecision,
-      updatedAt: createdAt,
-      turns: sourceDecision.turns.map((turn) =>
-        turn.id === turnId
-          ? {
-              ...turn,
-              responses: [
-                ...turn.responses,
-                { id: replyId, role, content: '', status: 'streaming', createdAt },
-              ],
-            }
-          : turn,
-      ),
-    };
-    setDecision(nextDecision);
-    void requestReply(role, nextDecision, replyId);
-  }
-
-  function startDecision(question: string, role: Role) {
-    const turnId = makeId('turn');
-    const createdAt = now();
-    const nextDecision: Decision = {
-      id: makeId('decision'),
-      title: question,
-      status: 'active',
-      verdict: null,
-      winner: null,
-      createdAt,
-      updatedAt: createdAt,
-      decidedAt: null,
-      turns: [{ id: turnId, userMessage: question, responses: [], createdAt }],
-    };
-    appendReply(nextDecision, turnId, role);
-  }
-
-  function summon(role: Role) {
-    if (!decision || thinkingRole || decision.verdict) return;
-    const turn = decision.turns[decision.turns.length - 1];
-    appendReply(decision, turn.id, role);
-  }
-
-  function addTurn(message: string, role: Role) {
-    if (!decision || thinkingRole || decision.verdict) return;
-    const turnId = makeId('turn');
-    const createdAt = now();
-    const nextDecision: Decision = {
-      ...decision,
-      updatedAt: createdAt,
-      turns: [...decision.turns, { id: turnId, userMessage: message, responses: [], createdAt }],
-    };
-    appendReply(nextDecision, turnId, role);
-  }
-
-  function retryReply(turnId: string, replyId: string) {
-    if (!decision || thinkingRole || decision.verdict) return;
-    const turn = decision.turns.find((candidate) => candidate.id === turnId);
-    const reply = turn?.responses.find((candidate) => candidate.id === replyId);
-    if (!reply || reply.status !== 'error' || !reply.error?.retryable) return;
-
-    const nextDecision: Decision = {
-      ...decision,
-      updatedAt: now(),
-      turns: decision.turns.map((candidate) =>
-        candidate.id === turnId
-          ? {
-              ...candidate,
-              responses: candidate.responses.map((candidateReply) =>
-                candidateReply.id === replyId
-                  ? {
-                      ...candidateReply,
-                      content: '',
-                      status: 'streaming',
-                      error: undefined,
-                      safetyMode: undefined,
-                    }
-                  : candidateReply,
-              ),
-            }
-          : candidate,
-      ),
-    };
-    setDecision(nextDecision);
-    void requestReply(reply.role, nextDecision, replyId);
-  }
-
-  function settle(verdict: Verdict) {
-    if (!decision) return;
-    abortActiveRequest();
-    clearSpeakerHold();
-    setThinkingRole(null);
-    setActiveReplyId(null);
-    setIsReceiving(false);
-    const decidedAt = now();
-    setDecision((current) => (current ? {
-      ...current,
-      status: 'decided',
-      verdict,
-      winner: verdict === 'yes' ? 'angel' : 'devil',
-      decidedAt,
-      updatedAt: decidedAt,
-    } : current));
-    setDialogOpen(false);
-    setTranscriptOpen(false);
-  }
-
-  function restart() {
-    abortActiveRequest();
-    clearSpeakerHold();
-    setDecision(null);
-    setThinkingRole(null);
-    setActiveReplyId(null);
-    setIsReceiving(false);
-    setDialogOpen(false);
-    setTranscriptOpen(false);
-  }
-
-  function openHistoryDecision(nextDecision: Decision) {
-    abortActiveRequest();
-    clearSpeakerHold();
-    setDecision(nextDecision);
-    setThinkingRole(null);
-    setActiveReplyId(null);
-    setIsReceiving(false);
-    setDialogOpen(false);
-    setTranscriptOpen(false);
-    setHistoryOpen(false);
-  }
-
-  function characterState(role: Role): CharacterState {
-    return resolveCharacterState({
-      role,
-      verdict: decision?.verdict || null,
-      activeRole: thinkingRole,
-      isReceiving,
-      lastSpeaker,
-    }) as CharacterState;
-  }
-
-  if (!isHydrated) {
-    return <main className="stage-shell" />;
-  }
-
-  const historyDialog = (
-    <HistoryDialog
-      decisions={history}
-      open={historyOpen}
-      onOpenChange={setHistoryOpen}
-      onOpenDecision={openHistoryDecision}
-    />
-  );
-  const storageWarning = databaseError || storageError ? (
-    <output className="storage-warning">
-      {databaseError ? <>{databaseError} <button type="button" onClick={() => void retryDatabaseSave()}>重试保存</button></> : '浏览器暂时无法保存本地备份，对话仍会保存到数据库。'}
-    </output>
-  ) : null;
-
-  if (!decision) {
-    return (
-      <>
-        <StartScreen
-          historyCount={history.length}
-          onHistory={() => setHistoryOpen(true)}
-          onStart={startDecision}
-        />
-        {historyDialog}
-        {storageWarning}
-      </>
-    );
-  }
-
-  function latestReply(role: Role): { reply: Reply; turnId: string } | null {
-    if (!decision) return null;
-    for (let turnIndex = decision.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
-      const turn = decision.turns[turnIndex];
-      for (let replyIndex = turn.responses.length - 1; replyIndex >= 0; replyIndex -= 1) {
-        const reply = turn.responses[replyIndex];
-        if (reply.role === role) return { reply, turnId: turn.id };
-      }
-    }
-    return null;
-  }
-
-  const angelReply = latestReply('angel');
-  const devilReply = latestReply('devil');
-
-  return (
-    <>
-      <main className="stage-shell" id="main">
-        <AppHeader
-          title={decision.title}
-          turnCount={decision.turns.length}
-          historyCount={history.length}
-          onHistory={() => setHistoryOpen(true)}
-          onDecide={() => setDialogOpen(true)}
-        />
-        <div className="duel-stage">
-          <CharacterPanel side="angel" state={characterState('angel')} reply={angelReply?.reply || null} turnId={angelReply?.turnId || null} isThinking={thinkingRole === 'angel'} onRetry={retryReply} />
-          <CharacterPanel side="devil" state={characterState('devil')} reply={devilReply?.reply || null} turnId={devilReply?.turnId || null} isThinking={thinkingRole === 'devil'} onRetry={retryReply} />
-          <Composer disabled={Boolean(thinkingRole || decision.verdict)} onSummon={summon} onNewTurn={addTurn} onHistory={() => setTranscriptOpen(true)} onDecide={() => setDialogOpen(true)} />
-        </div>
-
-        <Dialog open={transcriptOpen} onOpenChange={setTranscriptOpen}>
-          <DialogContent className="transcript-dialog">
-            <DialogHeader>
-              <span className="dialog-kicker"><MessageCircleMore /> CONVERSATION</span>
-              <DialogTitle>完整对话</DialogTitle>
-              <DialogDescription>这里保留每一轮提问和双方的全部回复。</DialogDescription>
-            </DialogHeader>
-            <Conversation turns={decision.turns} activeReplyId={activeReplyId} onRetry={retryReply} />
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="verdict-dialog" showCloseButton={false}>
-            <DialogHeader>
-              <span className="dialog-kicker"><Gavel /> FINAL VERDICT</span>
-              <DialogTitle>这一局，你决定怎么做？</DialogTitle>
-              <DialogDescription>角色已经说完自己的立场。最终选择只属于你。</DialogDescription>
-            </DialogHeader>
-            <div className="verdict-options">
-              <button className="verdict-yes" onClick={() => settle('yes')}><Feather /><span><small>YES · 天使获胜</small>我决定去做</span><ChevronRight /></button>
-              <button className="verdict-no" onClick={() => settle('no')}><Flame /><span><small>NO · 恶魔获胜</small>我决定不做</span><ChevronRight /></button>
-            </div>
-            <DialogClose className="continue-button"><X /> 我还想再听听</DialogClose>
-          </DialogContent>
-        </Dialog>
-
-        {decision.verdict ? <ResultOverlay decision={decision} onRestart={restart} /> : null}
-      </main>
-      {historyDialog}
-      {storageWarning}
-    </>
+      )}
+    </div>
   );
 }
