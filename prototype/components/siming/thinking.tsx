@@ -1,13 +1,39 @@
-/** While the guide divines: one brush circle (圆相) drawn, held, and let go, again and again. */
-export function InkThinking({ size = 56, label = '司命正在推演' }: { size?: number; label?: string }) {
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+
+/**
+ * While the guide divines: a happyhorse clip of ink blooming and turning in
+ * water, kept small and round and multiplied into the paper.
+ */
+export function InkThinking({ size = 112, label = '司命正在推演' }: { size?: number; label?: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [failed, setFailed] = useState(false);
+
+  // Reduced motion: hold the first bloom still instead of looping.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      video.removeAttribute('autoplay');
+      video.pause();
+    }
+  }, []);
+
   return (
     <output className="ink-thinking" aria-label={label} style={{ width: size, height: size }}>
-      <svg viewBox="0 0 100 100" aria-hidden="true">
-        {/* Wash, body and dry edge, laid a beat apart so the stroke swells and thins like a brush. */}
-        <path className="enso-wash" d="M34 14 A38 38 0 1 1 15 36" pathLength={100} />
-        <path className="enso-body" d="M34 14 A38 38 0 1 1 15 36" pathLength={100} />
-        <path className="enso-dry" d="M36 17 A35 35 0 1 1 18 37" pathLength={100} />
-      </svg>
+      {!failed && (
+        <video
+          ref={videoRef}
+          src="/videos/thinking.mp4"
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="auto"
+          aria-hidden="true"
+          onError={() => setFailed(true)}
+        />
+      )}
     </output>
   );
 }
