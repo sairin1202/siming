@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -16,6 +16,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   last_login_at INTEGER NOT NULL
 );
@@ -41,12 +42,6 @@ CREATE TABLE IF NOT EXISTS records (
   PRIMARY KEY (user_id, id)
 );
 CREATE INDEX IF NOT EXISTS records_user_at ON records(user_id, at DESC);
-CREATE TABLE IF NOT EXISTS login_codes (
-  email TEXT PRIMARY KEY,
-  code_hash TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0
-);
 CREATE TABLE IF NOT EXISTS auth_events (
   kind TEXT NOT NULL,
   email TEXT NOT NULL,
@@ -75,13 +70,22 @@ const hashToken = (token) => createHash('sha256').update(token).digest('hex');
 
 // ---------- 用户与会话 ----------
 
-/** 按邮箱登录（不存在则注册），返回新会话令牌。 */
-export function createSession(db, email, now = Date.now()) {
-  db.prepare(
-    `INSERT INTO users (email, created_at, last_login_at) VALUES (?, ?, ?)
-     ON CONFLICT(email) DO UPDATE SET last_login_at = excluded.last_login_at`,
-  ).run(email, now, now);
-  const user = db.prepare('SELECT id, email FROM users WHERE email = ?').get(email);
+/** 新建用户；邮箱已注册时返回 null。 */
+export function createUser(db, email, passwordHash, now = Date.now()) {
+  const result = db
+    .prepare('INSERT INTO users (email, password_hash, created_at, last_login_at) VALUES (?, ?, ?, ?) ON CONFLICT(email) DO NOTHING')
+    .run(email, passwordHash, now, now);
+  return result.changes ? { id: Number(result.lastInsertRowid), email } : null;
+}
+
+export function findUserByEmail(db, email) {
+  const row = db.prepare('SELECT id, email, password_hash FROM users WHERE email = ?').get(email);
+  return row ? { id: Number(row.id), email: row.email, passwordHash: row.password_hash } : null;
+}
+
+/** 为用户开一个新会话，返回令牌（库里只存其哈希）。 */
+export function createSession(db, user, now = Date.now()) {
+  db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(now, user.id);
   const token = randomBytes(32).toString('base64url');
   const expiresAt = now + SESSION_DAYS * DAY_MS;
   db.prepare('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(
@@ -91,7 +95,7 @@ export function createSession(db, email, now = Date.now()) {
     expiresAt,
   );
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
-  return { token, expiresAt, user: { id: Number(user.id), email: user.email } };
+  return { token, expiresAt, user: { id: user.id, email: user.email } };
 }
 
 export function userForToken(db, token, now = Date.now()) {
@@ -109,42 +113,13 @@ export function deleteSession(db, token) {
   if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));
 }
 
-// ---------- 验证码 ----------
-
-export const CODE_LENGTH = 6;
-export const CODE_MINUTES = 10;
-const MAX_CODE_ATTEMPTS = 5;
-
-const hashCode = (email, code) => createHash('sha256').update(`${email}:${code}`).digest();
-
-/** 生成新验证码，替换此邮箱之前的验证码；只存哈希。 */
-export function issueLoginCode(db, email, now = Date.now()) {
-  const code = String(randomInt(0, 10 ** CODE_LENGTH)).padStart(CODE_LENGTH, '0');
-  db.prepare(
-    `INSERT INTO login_codes (email, code_hash, expires_at, attempts) VALUES (?, ?, ?, 0)
-     ON CONFLICT(email) DO UPDATE SET code_hash = excluded.code_hash, expires_at = excluded.expires_at, attempts = 0`,
-  ).run(email, hashCode(email, code).toString('hex'), now + CODE_MINUTES * 60_000);
-  db.prepare('DELETE FROM login_codes WHERE expires_at < ?').run(now);
-  return code;
-}
-
-/** 校验验证码：通过即作废；错满五次也作废，须重新获取。 */
-export function consumeLoginCode(db, email, code, now = Date.now()) {
-  const row = db.prepare('SELECT code_hash, expires_at, attempts FROM login_codes WHERE email = ?').get(email);
-  if (!row || row.expires_at < now || row.attempts >= MAX_CODE_ATTEMPTS) return false;
-  if (timingSafeEqual(Buffer.from(row.code_hash, 'hex'), hashCode(email, code))) {
-    db.prepare('DELETE FROM login_codes WHERE email = ?').run(email);
-    return true;
-  }
-  db.prepare('UPDATE login_codes SET attempts = attempts + 1 WHERE email = ?').run(email);
-  return false;
-}
-
-// ---------- 发送频率 ----------
+// ---------- 登录与注册频率 ----------
 
 export const LIMITS = {
-  // 每个邮箱 60 秒一次、每天 10 次；每个 IP 每小时 30 次。
-  send: { emailGapMs: 60_000, emailDaily: 10, ipHourly: 30 },
+  // 每个邮箱 15 分钟内错 5 次即暂停；每个 IP 15 分钟内错 30 次即暂停。
+  loginFail: { windowMs: 15 * 60_000, perEmail: 5, perIp: 30 },
+  // 每个 IP 每小时注册 10 个账号。
+  register: { windowMs: 3_600_000, perIp: 10 },
 };
 
 function countSince(db, kind, column, value, since) {
@@ -154,17 +129,25 @@ function countSince(db, kind, column, value, since) {
   );
 }
 
-/** 返回不能发送的原因；可以发送时返回 null。 */
-export function sendBlockedReason(db, email, ip, now = Date.now()) {
-  if (countSince(db, 'send', 'email', email, now - LIMITS.send.emailGapMs) > 0) return '验证码已发出，请一分钟后再试。';
-  if (countSince(db, 'send', 'email', email, now - DAY_MS) >= LIMITS.send.emailDaily) return '今日发送次数已达上限，请明日再试。';
-  if (countSince(db, 'send', 'ip', ip, now - 3_600_000) >= LIMITS.send.ipHourly) return '请求太频繁，请稍后再试。';
-  return null;
+export function loginBlocked(db, email, ip, now = Date.now()) {
+  const since = now - LIMITS.loginFail.windowMs;
+  return (
+    countSince(db, 'login_fail', 'email', email, since) >= LIMITS.loginFail.perEmail ||
+    countSince(db, 'login_fail', 'ip', ip, since) >= LIMITS.loginFail.perIp
+  );
+}
+
+export function registerBlocked(db, ip, now = Date.now()) {
+  return countSince(db, 'register', 'ip', ip, now - LIMITS.register.windowMs) >= LIMITS.register.perIp;
 }
 
 export function logAuthEvent(db, kind, email, ip, now = Date.now()) {
   db.prepare('INSERT INTO auth_events (kind, email, ip, at) VALUES (?, ?, ?, ?)').run(kind, email, ip, now);
   db.prepare('DELETE FROM auth_events WHERE at < ?').run(now - 2 * DAY_MS);
+}
+
+export function clearLoginFails(db, email) {
+  db.prepare("DELETE FROM auth_events WHERE kind = 'login_fail' AND email = ?").run(email);
 }
 
 // ---------- 问事记录 ----------

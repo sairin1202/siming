@@ -82,7 +82,7 @@ type SendBody = {
   action?: { type: string; choice?: string; birth?: BirthFormValue; tosses?: number[]; mode?: Mode };
 };
 
-const LOGIN_REASON = '卦辞与命理须验明来者方可示之，请以邮箱验证。';
+const LOGIN_REASON = '卦辞与命理须验明来者方可示之。';
 
 const GREETING = '夜阑人静\n君心有疑 不妨言之';
 const INITIAL_STATE: GuideState = {

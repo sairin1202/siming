@@ -13,12 +13,6 @@ export function normalizeEmail(value) {
   return email;
 }
 
-export function normalizeCode(value) {
-  const code = typeof value === 'string' ? value.trim() : '';
-  if (!/^\d{6}$/.test(code)) throw new RequestError(400, '请输入邮件中的六位验证码。');
-  return code;
-}
-
 /** 只露出开头一两个字符和域名，如 ab***@qq.com。 */
 export function maskEmail(email) {
   const [name, domain] = email.split('@');

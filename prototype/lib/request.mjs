@@ -116,9 +116,9 @@ export function parseGuideRequest(payload) {
   };
 }
 
-/** 把 RequestError、MailError 转成 JSON 响应；其他错误记日志并返回 500。 */
+/** 把 RequestError 转成 JSON 响应；其他错误记日志并返回 500。 */
 export function errorResponse(error) {
-  if (error instanceof RequestError || error?.name === 'MailError') {
+  if (error instanceof RequestError) {
     return Response.json({ error: error.message }, { status: error.status, headers: { 'Cache-Control': 'no-store' } });
   }
   console.error('Request failed:', error?.message);

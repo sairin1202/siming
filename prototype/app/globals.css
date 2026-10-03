@@ -1467,3 +1467,13 @@ button { cursor: pointer; }
 .record-reading summary { cursor: pointer; letter-spacing: 0.15em; color: var(--ink-pale); }
 .record-reading p { margin: 6px 0 0; white-space: pre-line; line-height: 1.8; }
 .login-invite { display: flex; justify-content: center; }
+.login-switch {
+  border: 0;
+  background: none;
+  padding: 0 0 0 6px;
+  font-size: inherit;
+  letter-spacing: inherit;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

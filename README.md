@@ -28,26 +28,16 @@
 | `prototype/lib/guide.mjs` | 对话阶段：问心 → 择法（起卦 / 观命）→ 起卦：掷钱成卦；观命：生辰帖与确认 → 解读 → 追问 → 决定 |
 | `prototype/lib/agent.mjs` | 解读与追问的模型提示词、安全分流 |
 | `prototype/app/api/guide/route.ts` | 流式接口；未配置模型或模型失败时用本地文案兜底 |
-| `prototype/app/page.tsx`、`components/siming/` | 水墨山水场景、毛笔八卦、对话与卡片；`login.tsx` 为邮箱验证码登录框 |
-| `prototype/lib/mailer.mjs` | 通过 SMTP（nodemailer）发送登录验证码邮件 |
-| `prototype/lib/db.mjs`、`lib/auth.mjs` | SQLite（Node 内置 `node:sqlite`）中的用户、验证码、登录会话、问事记录与发信频率限制；会话 cookie 与邮箱校验 |
+| `prototype/app/page.tsx`、`components/siming/` | 水墨山水场景、毛笔八卦、对话与卡片；`login.tsx` 为邮箱密码登录 / 注册框 |
+| `prototype/lib/db.mjs`、`lib/auth.mjs`、`lib/password.mjs` | SQLite（Node 内置 `node:sqlite`）中的用户、登录会话、问事记录与登录频率限制；会话 cookie、邮箱校验、scrypt 密码哈希 |
 | `prototype/app/api/auth/*`、`app/api/records` | 发码、登录、当前用户、退出；问事记录的读取、保存与标记 |
 
 ## 登录与记录
 
 - 问事、择法、填生辰都不需要登录；**出结果时须登录**：卦象、命盘、解读、追问和吉日都由服务端把关，未登录时 `/api/guide` 只返回 `auth` 事件且不推进对话，前端弹出登录框，登录后原样重发这一步。
-- 登录用邮箱 + 六位验证码，首次登录即注册。验证码只存哈希，10 分钟有效，用过即废，输错 5 次作废须重新获取。会话令牌只存其 SHA-256，cookie 为 `HttpOnly; SameSite=Lax`（HTTPS 下加 `Secure`），有效期 30 天。
-- 频率限制：每个邮箱 60 秒一封、每天 10 封；每个 IP 每小时 30 封。
+- 用邮箱 + 密码注册和登录，不发验证邮件，邮箱不做真实性验证，密码暂不能找回。密码至少 8 位，以 scrypt 加盐哈希保存。会话令牌只存其 SHA-256，cookie 为 `HttpOnly; SameSite=Lax`（HTTPS 下加 `Secure`），有效期 30 天。
+- 频率限制：每个邮箱 15 分钟内输错 5 次、每个 IP 15 分钟内输错 30 次即暂停登录；每个 IP 每小时最多注册 10 个账号。邮箱不存在与密码错误给同样的提示。
 - 问事记录（含司命之辞）随账号存于服务端，换设备登录也能看到；登录时会把本机 localStorage 里的旧记录并入账号。生辰仍只存于本机。
-
-### 发信配置
-
-在 `.env` 填写 `SMTP_HOST`、`SMTP_USER`、`SMTP_PASS`（部署脚本会检查这三项），可选 `SMTP_PORT`（默认 465）和 `MAIL_FROM`。云服务器通常封禁 25 端口，请用 465。
-
-- QQ 邮箱：`smtp.qq.com`，在邮箱「设置 → 账号」开启 SMTP 服务，`SMTP_PASS` 填生成的授权码而非登录密码。
-- 阿里云邮件推送：`smtpdm.aliyun.com`，需先验证发信域名并设置发信地址的 SMTP 密码；送达率最好。
-
-本地开发不想真发信时，在 `.env` 加 `MAIL_MOCK=1`，验证码打印在服务端日志里（生产环境开启会直接报错）。
 
 ## 画面素材
 
