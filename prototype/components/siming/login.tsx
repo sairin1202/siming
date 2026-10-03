@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-export type Account = { phone: string };
+export type Account = { email: string };
 
 async function post<T>(url: string, body: unknown): Promise<T> {
   const response = await fetch(url, {
@@ -15,7 +15,7 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   return payload as T;
 }
 
-/** 手机号与短信验证码登录；首次登录即注册。 */
+/** 邮箱验证码登录；首次登录即注册。 */
 export function LoginDialog({
   reason,
   onDone,
@@ -26,16 +26,16 @@ export function LoginDialog({
   onDone: (account: Account) => void;
   onClose: () => void;
 }) {
-  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [wait, setWait] = useState(0);
   const [pending, setPending] = useState<'send' | 'login' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const codeRef = useRef<HTMLInputElement>(null);
-  const phoneRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => phoneRef.current?.focus(), []);
+  useEffect(() => emailRef.current?.focus(), []);
 
   useEffect(() => {
     if (wait <= 0) return;
@@ -51,15 +51,15 @@ export function LoginDialog({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const phoneValid = /^1[3-9]\d{9}$/.test(phone);
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
   const sendCode = async () => {
-    if (!phoneValid || wait > 0 || pending) return;
+    if (!emailValid || wait > 0 || pending) return;
     setPending('send');
     setError(null);
     try {
-      const result = await post<{ resendAfter: number }>('/api/auth/sms', { phone });
-      setSentTo(phone);
+      const result = await post<{ resendAfter: number }>('/api/auth/code', { email: email.trim() });
+      setSentTo(email.trim());
       setWait(result.resendAfter);
       codeRef.current?.focus();
     } catch (err) {
@@ -74,7 +74,7 @@ export function LoginDialog({
     setPending('login');
     setError(null);
     try {
-      const result = await post<{ user: Account }>('/api/auth/login', { phone: sentTo, code });
+      const result = await post<{ user: Account }>('/api/auth/login', { email: sentTo, code });
       onDone(result.user);
     } catch (err) {
       setError((err as Error).message);
@@ -99,21 +99,24 @@ export function LoginDialog({
           }}
         >
           <label className="login-field">
-            <span>手机</span>
+            <span>邮箱</span>
             <input
-              ref={phoneRef}
-              value={phone}
+              ref={emailRef}
+              type="email"
+              value={email}
               onChange={(event) => {
-                setPhone(event.target.value.replace(/\D/g, '').slice(0, 11));
+                setEmail(event.target.value.slice(0, 254));
                 setSentTo(null);
                 setCode('');
               }}
-              inputMode="numeric"
-              autoComplete="tel-national"
-              placeholder="大陆手机号"
-              aria-label="手机号"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder="name@example.com"
+              aria-label="邮箱"
             />
-            <button type="button" className="login-send" disabled={!phoneValid || wait > 0 || pending !== null} onClick={() => void sendCode()}>
+            <button type="button" className="login-send" disabled={!emailValid || wait > 0 || pending !== null} onClick={() => void sendCode()}>
               {pending === 'send' ? '发送中' : wait > 0 ? `${wait}秒` : sentTo ? '重发' : '取码'}
             </button>
           </label>
@@ -127,7 +130,7 @@ export function LoginDialog({
               autoComplete="one-time-code"
               placeholder={sentTo ? '六位数字' : '先取验证码'}
               disabled={!sentTo}
-              aria-label="短信验证码"
+              aria-label="邮件验证码"
             />
           </label>
           <p className="login-error" role="alert">
@@ -137,7 +140,8 @@ export function LoginDialog({
             {pending === 'login' ? '验看中' : '入'}
           </button>
         </form>
-        <p className="login-note">未注册的手机号验证后自动注册。所问之录随账号保存。</p>
+        {sentTo && <p className="muted">验证码已寄往 {sentTo}，十分钟内有效；若未见，请看垃圾邮件。</p>}
+        <p className="login-note">未注册的邮箱验证后自动注册。所问之录随账号保存。</p>
       </dialog>
     </>
   );

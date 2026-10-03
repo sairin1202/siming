@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { checkVerifyCode, percentEncode, sendVerifyCode, signParams } from './aliyun-sms.mjs';
-import { clientIp, maskPhone, normalizeCode, normalizePhone, readCookie } from './auth.mjs';
+import { clientIp, maskEmail, normalizeCode, normalizeEmail, readCookie } from './auth.mjs';
 import {
+  CODE_MINUTES,
   LIMITS,
+  consumeLoginCode,
   createSession,
   deleteSession,
+  issueLoginCode,
   listRecords,
   logAuthEvent,
   openDb,
@@ -15,88 +17,20 @@ import {
   sendBlockedReason,
   setOutcome,
   userForToken,
-  verifyBlocked,
 } from './db.mjs';
+import { loginMail, mailSettings, sendLoginCode } from './mailer.mjs';
 
-test('签名与阿里云文档示例一致', () => {
-  const signed = signParams(
-    {
-      AccessKeyId: 'testid',
-      Action: 'DescribeRegions',
-      Format: 'XML',
-      SignatureMethod: 'HMAC-SHA1',
-      SignatureNonce: '3ee8c1b8-83d3-44af-a94f-4e0ad82fd6cf',
-      SignatureVersion: '1.0',
-      Timestamp: '2016-02-23T12:46:24Z',
-      Version: '2014-05-26',
-    },
-    'testsecret',
-    'GET',
-  );
-  assert.equal(signed.Signature, 'OLeaidS1JvxuMvnyHOwuJ+uX5qY=');
-});
-
-test('percentEncode 按 RFC 3986 编码', () => {
-  assert.equal(percentEncode("a b*c~d!'()"), 'a%20b%2Ac~d%21%27%28%29');
-  assert.equal(percentEncode('{"code":"##code##"}'), '%7B%22code%22%3A%22%23%23code%23%23%22%7D');
-});
-
-const settings = {
-  mock: false,
-  accessKeyId: 'id',
-  accessKeySecret: 'secret',
-  signName: '速通互联验证码',
-  templateCode: '100001',
-  schemeName: '',
-};
-
-function fakeFetch(reply) {
-  const calls = [];
-  const impl = async (url, init) => {
-    calls.push({ url, params: Object.fromEntries(new URLSearchParams(init.body)) });
-    return new Response(JSON.stringify(reply));
-  };
-  return { calls, impl };
-}
-
-test('发送验证码带上签名、模板与有效期', async () => {
-  const { calls, impl } = fakeFetch({ Code: 'OK', Model: {} });
-  await sendVerifyCode('13800138000', settings, impl);
-  const { params } = calls[0];
-  assert.equal(params.Action, 'SendSmsVerifyCode');
-  assert.equal(params.PhoneNumber, '13800138000');
-  assert.equal(params.SignName, '速通互联验证码');
-  assert.equal(params.TemplateParam, '{"code":"##code##","min":"5"}');
-  assert.equal(params.CodeLength, '6');
-  assert.ok(params.Signature);
-  // 签名可由其余参数复现。
-  const { Signature, ...rest } = params;
-  assert.equal(signParams(rest, 'secret').Signature, Signature);
-});
-
-test('阿里云报错转为友好提示', async () => {
-  const { impl } = fakeFetch({ Code: 'biz.FREQUENCY', Message: 'check frequency failed' });
-  await assert.rejects(sendVerifyCode('13800138000', settings, impl), { name: 'SmsError', status: 429, message: /频繁/ });
-  const { impl: unknown } = fakeFetch({ Code: 'isv.SOMETHING', Message: 'x' });
-  await assert.rejects(sendVerifyCode('13800138000', settings, unknown), { status: 502 });
-  await assert.rejects(sendVerifyCode('13800138000', { ...settings, accessKeyId: '' }, unknown), { status: 503 });
-});
-
-test('校验结果只认 PASS', async () => {
-  assert.equal(await checkVerifyCode('13800138000', '123456', settings, fakeFetch({ Code: 'OK', Model: { VerifyResult: 'PASS' } }).impl), true);
-  assert.equal(await checkVerifyCode('13800138000', '123456', settings, fakeFetch({ Code: 'OK', Model: { VerifyResult: 'UNKNOWN' } }).impl), false);
-  assert.equal(await checkVerifyCode('13800138000', '000000', { ...settings, mock: true }), true);
-  assert.equal(await checkVerifyCode('13800138000', '123456', { ...settings, mock: true }), false);
-});
-
-test('手机号与验证码格式', () => {
-  assert.equal(normalizePhone('138 0013-8000'), '13800138000');
-  assert.equal(normalizePhone('+8613800138000'), '13800138000');
-  assert.throws(() => normalizePhone('12800138000'), { status: 400 });
-  assert.throws(() => normalizePhone(13800138000), { status: 400 });
-  assert.equal(normalizeCode(' 123456 '), '123456');
-  assert.throws(() => normalizeCode('12a456'), { status: 400 });
-  assert.equal(maskPhone('13800138000'), '138****8000');
+test('邮箱与验证码格式', () => {
+  assert.equal(normalizeEmail('  Foo.Bar+x@QQ.com '), 'foo.bar+x@qq.com');
+  assert.throws(() => normalizeEmail('foo@'), { status: 400 });
+  assert.throws(() => normalizeEmail('foo@bar'), { status: 400 });
+  assert.throws(() => normalizeEmail('a b@qq.com'), { status: 400 });
+  assert.throws(() => normalizeEmail(`${'a'.repeat(250)}@qq.com`), { status: 400 });
+  assert.throws(() => normalizeEmail(42), { status: 400 });
+  assert.equal(normalizeCode(' 012345 '), '012345');
+  assert.throws(() => normalizeCode('12345'), { status: 400 });
+  assert.equal(maskEmail('sairin@gmail.com'), 'sa***@gmail.com');
+  assert.equal(maskEmail('ab@qq.com'), 'a***@qq.com');
 });
 
 test('读取 cookie 与客户端 IP', () => {
@@ -111,13 +45,74 @@ test('读取 cookie 与客户端 IP', () => {
   assert.equal(clientIp(request), 'unknown');
 });
 
+test('验证码：一次有效、过期失效、重发替换、错满五次作废', () => {
+  const db = openDb(':memory:');
+  const now = Date.now();
+  const code = issueLoginCode(db, 'a@qq.com', now);
+  assert.match(code, /^\d{6}$/);
+  assert.equal(consumeLoginCode(db, 'b@qq.com', code, now), false);
+  assert.equal(consumeLoginCode(db, 'a@qq.com', code, now + 1000), true);
+  assert.equal(consumeLoginCode(db, 'a@qq.com', code, now + 2000), false);
+
+  const late = issueLoginCode(db, 'a@qq.com', now);
+  assert.equal(consumeLoginCode(db, 'a@qq.com', late, now + CODE_MINUTES * 60_000 + 1), false);
+
+  const first = issueLoginCode(db, 'a@qq.com', now);
+  const second = issueLoginCode(db, 'a@qq.com', now);
+  if (first !== second) assert.equal(consumeLoginCode(db, 'a@qq.com', first, now), false);
+  assert.equal(consumeLoginCode(db, 'a@qq.com', second, now), true);
+
+  const guarded = issueLoginCode(db, 'a@qq.com', now);
+  const wrong = guarded === '000000' ? '111111' : '000000';
+  for (let i = 0; i < 5; i += 1) assert.equal(consumeLoginCode(db, 'a@qq.com', wrong, now), false);
+  assert.equal(consumeLoginCode(db, 'a@qq.com', guarded, now), false);
+});
+
+test('发送频率限制', () => {
+  const db = openDb(':memory:');
+  const now = Date.now();
+  assert.equal(sendBlockedReason(db, 'a@qq.com', 'ip', now), null);
+  logAuthEvent(db, 'send', 'a@qq.com', 'ip', now);
+  assert.match(sendBlockedReason(db, 'a@qq.com', 'ip', now + 30_000), /一分钟/);
+  assert.equal(sendBlockedReason(db, 'a@qq.com', 'ip', now + 61_000), null);
+  for (let i = 1; i < LIMITS.send.emailDaily; i += 1) logAuthEvent(db, 'send', 'a@qq.com', 'ip', now + i * 61_000);
+  assert.match(sendBlockedReason(db, 'a@qq.com', 'other', now + 3_600_000), /上限/);
+  for (let i = 0; i < LIMITS.send.ipHourly; i += 1) logAuthEvent(db, 'send', `u${i}@qq.com`, 'busy', now);
+  assert.match(sendBlockedReason(db, 'new@qq.com', 'busy', now + 1000), /频繁/);
+});
+
+test('发信配置与邮件内容', async () => {
+  const settings = mailSettings({ SMTP_HOST: 'smtp.qq.com', SMTP_USER: 'me@qq.com', SMTP_PASS: 'x' });
+  assert.equal(settings.port, 465);
+  assert.equal(settings.secure, true);
+  assert.equal(settings.from, '司命 <me@qq.com>');
+  assert.equal(mailSettings({ SMTP_PORT: '587' }).secure, false);
+  assert.throws(() => mailSettings({ MAIL_MOCK: '1', NODE_ENV: 'production' }), { name: 'MailError' });
+
+  const mail = loginMail('012345', 10);
+  assert.match(mail.subject, /012345/);
+  assert.match(mail.text, /10 分钟内有效/);
+
+  const sent = [];
+  await sendLoginCode('a@qq.com', '012345', 10, settings, { sendMail: async (message) => sent.push(message) });
+  assert.equal(sent[0].to, 'a@qq.com');
+  assert.equal(sent[0].from, '司命 <me@qq.com>');
+
+  await assert.rejects(sendLoginCode('a@qq.com', '1', 10, { ...settings, pass: '' }), { status: 503 });
+  const bounce = Object.assign(new Error('mailbox unavailable'), { responseCode: 550 });
+  await assert.rejects(
+    sendLoginCode('a@qq.com', '1', 10, settings, { sendMail: async () => Promise.reject(bounce) }),
+    { status: 400, message: /检查邮箱/ },
+  );
+});
+
 test('登录会话：创建、查询、过期与退出', () => {
   const db = openDb(':memory:');
   const now = Date.now();
-  const first = createSession(db, '13800138000', now);
-  const again = createSession(db, '13800138000', now);
+  const first = createSession(db, 'a@qq.com', now);
+  const again = createSession(db, 'a@qq.com', now);
   assert.equal(first.user.id, again.user.id);
-  assert.deepEqual(userForToken(db, first.token, now), { id: first.user.id, phone: '13800138000' });
+  assert.deepEqual(userForToken(db, first.token, now), { id: first.user.id, email: 'a@qq.com' });
   assert.equal(userForToken(db, first.token, first.expiresAt + 1), null);
   assert.equal(userForToken(db, 'nope', now), null);
   deleteSession(db, first.token);
@@ -125,25 +120,10 @@ test('登录会话：创建、查询、过期与退出', () => {
   assert.ok(userForToken(db, again.token, now));
 });
 
-test('发送与校验频率限制', () => {
-  const db = openDb(':memory:');
-  const now = Date.now();
-  assert.equal(sendBlockedReason(db, '13800138000', 'ip', now), null);
-  logAuthEvent(db, 'send', '13800138000', 'ip', now);
-  assert.match(sendBlockedReason(db, '13800138000', 'ip', now + 30_000), /一分钟/);
-  assert.equal(sendBlockedReason(db, '13800138000', 'ip', now + 61_000), null);
-  for (let i = 1; i < LIMITS.send.phoneDaily; i += 1) logAuthEvent(db, 'send', '13800138000', 'ip', now + i * 61_000);
-  assert.match(sendBlockedReason(db, '13800138000', 'other', now + 3_600_000), /上限/);
-
-  for (let i = 0; i < LIMITS.verify.phoneFails; i += 1) logAuthEvent(db, 'verify_fail', '13900139000', 'ip', now);
-  assert.equal(verifyBlocked(db, '13900139000', now + 1000), true);
-  assert.equal(verifyBlocked(db, '13900139000', now + LIMITS.verify.windowMs + 1), false);
-});
-
 test('问事记录：校验、保存、去重与标记', () => {
   const db = openDb(':memory:');
-  const { user } = createSession(db, '13800138000');
-  const other = createSession(db, '13900139000').user;
+  const { user } = createSession(db, 'a@qq.com');
+  const other = createSession(db, 'b@qq.com').user;
   const record = sanitizeRecord({
     id: 'r1',
     question: '要不要换工作',

@@ -126,7 +126,7 @@ run_app() {
 # 服务安装包来自源码与 lock 文件，不上传本机 node_modules。
 # shellcheck disable=SC2016 # 此处是 JavaScript 模板字符串。
 run_app "$NODE_BIN" --env-file=.env --input-type=module -e '
-  for (const key of ["NEVA_API_KEY", "ALIYUN_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_SECRET", "ALIYUN_SMS_SIGN_NAME", "ALIYUN_SMS_TEMPLATE_CODE"]) {
+  for (const key of ["NEVA_API_KEY", "SMTP_HOST", "SMTP_USER", "SMTP_PASS"]) {
     if (!process.env[key]?.trim()) {
       console.error(`缺少环境配置: ${key}`); process.exit(1);
     }

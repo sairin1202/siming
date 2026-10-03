@@ -3,21 +3,27 @@ import { RequestError } from './request.mjs';
 
 export const SESSION_COOKIE = 'siming_sid';
 
-/** 大陆手机号：去掉空格、横线和 +86 前缀后为 1 开头的 11 位。 */
-export function normalizePhone(value) {
-  if (typeof value !== 'string') throw new RequestError(400, '请输入手机号。');
-  const phone = value.replace(/[\s-]/g, '').replace(/^(\+?86)(?=1\d{10}$)/, '');
-  if (!/^1[3-9]\d{9}$/.test(phone)) throw new RequestError(400, '请输入正确的大陆手机号。');
-  return phone;
+/** 邮箱：去掉首尾空白并转小写，按常见格式校验。 */
+export function normalizeEmail(value) {
+  if (typeof value !== 'string') throw new RequestError(400, '请输入邮箱。');
+  const email = value.trim().toLowerCase();
+  if (email.length > 254 || !/^[^\s@<>()",;:]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(email)) {
+    throw new RequestError(400, '请输入正确的邮箱。');
+  }
+  return email;
 }
 
 export function normalizeCode(value) {
   const code = typeof value === 'string' ? value.trim() : '';
-  if (!/^\d{4,8}$/.test(code)) throw new RequestError(400, '请输入短信中的数字验证码。');
+  if (!/^\d{6}$/.test(code)) throw new RequestError(400, '请输入邮件中的六位验证码。');
   return code;
 }
 
-export const maskPhone = (phone) => `${phone.slice(0, 3)}****${phone.slice(-4)}`;
+/** 只露出开头一两个字符和域名，如 ab***@qq.com。 */
+export function maskEmail(email) {
+  const [name, domain] = email.split('@');
+  return `${name.slice(0, name.length > 2 ? 2 : 1)}***@${domain}`;
+}
 
 export function readCookie(request, name) {
   for (const part of (request.headers.get('cookie') ?? '').split(';')) {

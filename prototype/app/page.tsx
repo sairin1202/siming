@@ -82,7 +82,7 @@ type SendBody = {
   action?: { type: string; choice?: string; birth?: BirthFormValue; tosses?: number[]; mode?: Mode };
 };
 
-const LOGIN_REASON = '卦辞与命理须验明手机方可示之。';
+const LOGIN_REASON = '卦辞与命理须验明来者方可示之，请以邮箱验证。';
 
 const GREETING = '夜阑人静\n君心有疑 不妨言之';
 const INITIAL_STATE: GuideState = {
@@ -659,7 +659,7 @@ export default function Page() {
               <div className="drawer-body">
                 {account ? (
                   <p className="account-line">
-                    {account.phone} 所问之录随账号保存
+                    {account.email} 所问之录随账号保存
                     <button type="button" className="ink-link" onClick={() => void signOut()}>
                       退出
                     </button>
