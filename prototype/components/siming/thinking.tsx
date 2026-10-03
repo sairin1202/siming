@@ -1,39 +1,12 @@
-'use client';
-
-import { useEffect, useRef, useState } from 'react';
-
 /**
- * While the guide divines: a happyhorse clip of ink blooming and turning in
- * water, kept small and round and multiplied into the paper.
+ * While the guide divines: a vast vortex of ink mist turning slowly around a
+ * still centre, with a fainter, wider veil of the same cloud turning behind it.
  */
-export function InkThinking({ size = 112, label = '司命正在推演' }: { size?: number; label?: string }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [failed, setFailed] = useState(false);
-
-  // Reduced motion: hold the first bloom still instead of looping.
-  useEffect(() => {
-    const video = videoRef.current;
-    if (video && matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      video.removeAttribute('autoplay');
-      video.pause();
-    }
-  }, []);
-
+export function InkThinking({ width = 'min(88vw, 500px)', label = '司命正在推演' }: { width?: string; label?: string }) {
   return (
-    <output className="ink-thinking" aria-label={label} style={{ width: size, height: size }}>
-      {!failed && (
-        <video
-          ref={videoRef}
-          src="/videos/thinking.mp4"
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="auto"
-          aria-hidden="true"
-          onError={() => setFailed(true)}
-        />
-      )}
+    <output className="ink-thinking" aria-label={label} style={{ width }}>
+      <span className="vortex-veil" aria-hidden="true" />
+      <span className="vortex-core" aria-hidden="true" />
     </output>
   );
 }

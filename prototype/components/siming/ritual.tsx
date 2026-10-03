@@ -183,7 +183,7 @@ export function CastRitual({
             </p>
           ) : (
             <div className="ritual-name is-waiting">
-              <InkThinking size={72} label="卦名将现" />
+              <InkThinking width="min(70vw, 280px)" label="卦名将现" />
             </div>
           )}
         </div>
