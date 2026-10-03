@@ -267,3 +267,24 @@ test('须登录：问事与择法不拦，填生辰、掷钱与结果才拦', ()
   const state = advance({ state: initialState(), profile: PROFILE, action: MING.action, now }).state;
   assert.equal(needsAccount(advance({ state, profile: PROFILE, message: '要不要表白', now })), true);
 });
+
+const NONSENSE_FACTS = { birthDate: null, birthTime: undefined, gender: null, place: null, meaningful: false };
+
+test('乱写不推进：问事、择法与追问时只请其以实相告', () => {
+  const first = talk('asdfghjkl');
+  assert.deepEqual(first.state, initialState());
+  assert.deepEqual(types(first), ['say']);
+  // 选了观命之后乱写，仍停在原处，不出生辰帖。
+  const ming = talk(MING, '哈哈哈');
+  assert.equal(ming.state.phase, 'question');
+  assert.equal(ming.state.question, null);
+  assert.deepEqual(types(ming), ['say']);
+  // 模型判为胡言乱语，同样不推进。
+  const state = initialState();
+  const judged = advance({ state, message: '饭桶爱上飞机', facts: { ...NONSENSE_FACTS }, now });
+  assert.deepEqual(judged.state, state);
+  // 核生辰时的「对」不受影响。
+  const confirmed = talk(MING, '要不要换工作', BIRTH, '对');
+  assert.ok(types(confirmed).includes('reading'));
+});
+

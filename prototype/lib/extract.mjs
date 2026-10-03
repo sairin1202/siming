@@ -134,6 +134,22 @@ export function looksLikeQuestion(text) {
   return QUESTION_PATTERN.test(text) || findTopic(text) !== null;
 }
 
+const KEYBOARD_RUN = /qwer|wert|erty|asdf|sdfg|dfgh|fghj|ghjk|hjkl|zxcv|xcvb|cvbn|vbnm|uiop|yuio/i;
+
+/** Keyboard mashing, a lone sound, symbols or one word over and over: nothing to divine on. */
+export function looksLikeNonsense(raw) {
+  const text = raw.replace(/[\s\p{P}\p{S}]/gu, '');
+  if ([...text].length < 2) return true;
+  if (/^\d+$/.test(text)) return true;
+  // 「哈哈」「呵呵呵」「asdasd」, but not a thank-you.
+  if (/^(.{1,3})\1+$/u.test(text) && !/^(谢谢|多谢|拜拜)+$/.test(text)) return true;
+  if (/^[a-z]+$/i.test(text) && text.length >= 4) {
+    const vowels = (text.match(/[aeiou]/gi) ?? []).length;
+    if (vowels / text.length < 0.2 || KEYBOARD_RUN.test(text)) return true;
+  }
+  return false;
+}
+
 /** The part of a message that is the question, without birth details. */
 export function findQuestionText(raw) {
   const clauses = raw.split(/[，,。；;！!\n]/).map((clause) => clause.trim()).filter(Boolean);
@@ -171,5 +187,6 @@ export function extractFacts(raw, now = new Date()) {
     newQuestion: looksLikeQuestion(text) && /要不要|该不该|应不应该|值不值得|能不能/.test(text),
     questionText: findQuestionText(raw),
     confirmation: findConfirmation(text),
+    meaningful: !looksLikeNonsense(raw),
   };
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { InkThinking } from './thinking';
 import { InkWriting } from './writing';
 
 export type GuaCardData = {
@@ -181,7 +182,9 @@ export function CastRitual({
               )}
             </p>
           ) : (
-            <p className="ritual-name is-waiting">…</p>
+            <div className="ritual-name is-waiting">
+              <InkThinking size={44} label="卦名将现" />
+            </div>
           )}
         </div>
       )}

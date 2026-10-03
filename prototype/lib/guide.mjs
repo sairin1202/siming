@@ -500,6 +500,10 @@ export function advance({ state, profile = null, message, action, facts: provide
   const text = message.trim();
   // The route passes facts read by the model; without them, fall back to local rules.
   const facts = providedFacts ?? extractFacts(text, now);
+  // Gibberish never becomes a question or a follow-up: the guide asks again and goes no further.
+  if (OPEN_PHASES.has(state.phase) && facts.meaningful === false) {
+    return { state, steps: [{ type: 'say', text: nonsenseReply(text) }] };
+  }
 
   switch (state.phase) {
     case 'question':
@@ -616,6 +620,16 @@ export function needsAccount(result) {
         (step.type === 'card' && RESULT_CARDS.has(step.card?.kind ?? '')),
     )
   );
+}
+
+// Phases where the user's words become a question or a follow-up.
+const OPEN_PHASES = new Set(['question', 'choose', 'decided', 'reading']);
+const NONSENSE_REPLIES = ['所言难解\n请以实事相告', '言无所指 无从推演\n何事令君踌躇', '心不诚则卦不灵\n请言真正所疑'];
+
+function nonsenseReply(text) {
+  let sum = 0;
+  for (const char of text) sum += char.codePointAt(0) ?? 0;
+  return NONSENSE_REPLIES[sum % NONSENSE_REPLIES.length];
 }
 
 function initialStateWith(state) {
