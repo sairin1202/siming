@@ -169,6 +169,18 @@ button { cursor: pointer; }
   transition: transform 300ms ease;
 }
 .icon-button:hover::before { transform: rotate(-8deg) scale(1.06); }
+.music-toggle { transition: transform 240ms ease, opacity 300ms ease; }
+.music-toggle.is-off { opacity: 0.4; }
+.music-toggle.is-off::after {
+  content: '';
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  top: 50%;
+  height: 1.6px;
+  background: var(--ink);
+  transform: rotate(-35deg);
+}
 
 .stage {
   position: relative;
