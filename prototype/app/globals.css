@@ -367,7 +367,8 @@ button { cursor: pointer; }
   z-index: 1;
   display: flex;
   flex-direction: column;
-  width: min(100%, 980px);
+  /* Wide, so a long reading can run its columns far to the left. */
+  width: min(100%, 1480px);
   min-height: 0;
 }
 .verse-area::before {
@@ -432,7 +433,7 @@ button { cursor: pointer; }
 /* Brush writing: vertical columns, right to left, top to bottom. */
 .ink-writing {
   writing-mode: vertical-rl;
-  height: min(52vh, 500px);
+  height: min(58vh, 600px);
   max-width: 100%;
   padding: 0 8px;
   overflow-x: auto;
@@ -1398,7 +1399,7 @@ button { cursor: pointer; }
     background: linear-gradient(180deg, transparent, rgba(250, 247, 240, 0.86) 12%, rgba(250, 247, 240, 0.86) 88%, transparent);
     filter: blur(4px);
   }
-  .ink-writing { height: min(46vh, 420px); font-size: 28px; }
+  .ink-writing { height: min(56vh, 520px); font-size: 28px; }
   .ritual-cast { grid-template-columns: auto; grid-template-rows: auto auto auto; gap: 22px; }
   .ritual-lines { grid-row: auto; }
   .ritual-center .ink-writing { font-size: 34px; }
