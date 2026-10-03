@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  last_login_at INTEGER NOT NULL
+  last_login_at INTEGER NOT NULL,
+  birth TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
@@ -57,6 +58,10 @@ export function openDb(path) {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   db.exec(SCHEMA);
+  // 早先建的库没有 birth 列。
+  if (!db.prepare('PRAGMA table_info(users)').all().some((column) => column.name === 'birth')) {
+    db.exec('ALTER TABLE users ADD COLUMN birth TEXT');
+  }
   return db;
 }
 
@@ -111,6 +116,24 @@ export function userForToken(db, token, now = Date.now()) {
 
 export function deleteSession(db, token) {
   if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));
+}
+
+// ---------- 生辰 ----------
+
+/** 账号所存的生辰（未校验的原始对象），没有则为 null。 */
+export function getBirth(db, userId) {
+  const row = db.prepare('SELECT birth FROM users WHERE id = ?').get(userId);
+  if (!row?.birth) return null;
+  try {
+    return JSON.parse(row.birth);
+  } catch {
+    return null;
+  }
+}
+
+/** 存下生辰；传 null 则忘却。调用方先校验。 */
+export function setBirth(db, userId, birth) {
+  db.prepare('UPDATE users SET birth = ? WHERE id = ?').run(birth ? JSON.stringify(birth) : null, userId);
 }
 
 // ---------- 登录与注册频率 ----------

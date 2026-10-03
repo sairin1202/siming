@@ -7,15 +7,18 @@ import {
 } from '@/lib/agent.mjs';
 import { currentUser } from '@/lib/auth.mjs';
 import { BaziInputError } from '@/lib/bazi.mjs';
+import { getDb } from '@/lib/db.mjs';
 import { buildExtractionMessages, parseExtraction } from '@/lib/extract-llm.mjs';
 import {
   FOLLOWUP_FALLBACK,
   advance,
   isBirthComplete,
+  needsAccount,
   sanitizeBirth,
   sanitizeState,
   templateReading,
 } from '@/lib/guide.mjs';
+import { accountBirth, keepBirth } from '@/lib/profile.mjs';
 import { RequestError, assertSameOrigin, parseGuideRequest, readJsonBody } from '@/lib/request.mjs';
 
 const DEFAULT_API_BASE_URL = 'https://nevatoken.com/v1';
@@ -49,17 +52,6 @@ class ProviderError extends Error {
     this.status = status;
     this.retryable = retryable;
   }
-}
-
-// 卦象、命盘、解读、追问和吉日都算「结果」，须登录后才给出。
-const RESULT_CARDS = new Set(['gua', 'chart', 'days']);
-function revealsResult(steps: Array<{ type: string; card?: { kind?: string } }>) {
-  return steps.some(
-    (step) =>
-      step.type === 'reading' ||
-      step.type === 'followup' ||
-      (step.type === 'card' && RESULT_CARDS.has(step.card?.kind ?? '')),
-  );
 }
 
 function eventChunk(event: GuideEvent) {
@@ -224,9 +216,11 @@ export async function POST(request: Request) {
   }
 
   const state = sanitizeState(parsed.state);
-  const profileBirth = sanitizeBirth(parsed.profile);
-  const profile = isBirthComplete(profileBirth) ? profileBirth : null;
-  const signedIn = currentUser(request) !== null;
+  const db = getDb();
+  const user = currentUser(request, db);
+  // 登录者以账号所存的生辰为准；账号尚无时才用本机的。
+  const clientBirth = sanitizeBirth(parsed.profile);
+  const profile = (user && accountBirth(db, user.id)) ?? (isBirthComplete(clientBirth) ? clientBirth : null);
   const safetyMode = detectSafetyMode([state.question ?? '', parsed.message ?? ''].join('\n'));
 
   const abortController = new AbortController();
@@ -253,7 +247,7 @@ export async function POST(request: Request) {
           facts,
           now: new Date(),
         });
-        if (!signedIn && revealsResult(result.steps)) {
+        if (!user && needsAccount(result)) {
           // 不推进状态：登录后客户端原样重发这次请求。
           send({ type: 'auth' });
           send({ type: 'done' });
@@ -262,8 +256,11 @@ export async function POST(request: Request) {
         send({ type: 'state', state: result.state });
 
         for (const step of result.steps) {
-          if (step.type === 'profile') send({ type: 'profile', birth: step.birth });
-          else if (step.type === 'say') send({ type: 'say', text: step.text });
+          if (step.type === 'profile') {
+            // 结果须登录方得，此处必有 user。
+            if (user) keepBirth(db, user.id, step.birth);
+            send({ type: 'profile', birth: step.birth });
+          } else if (step.type === 'say') send({ type: 'say', text: step.text });
           else if (step.type === 'card') send({ type: 'card', card: step.card });
           else if (step.type === 'reading') {
             const fallback =

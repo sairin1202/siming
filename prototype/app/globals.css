@@ -1459,6 +1459,7 @@ button { cursor: pointer; }
 .login-error { min-height: 1.4em; margin: 0; font-size: 13px; color: var(--destructive); letter-spacing: 0.05em; }
 .login-submit { align-self: center; font-size: 24px; }
 .login-submit:disabled { opacity: 0.3; cursor: default; }
+.login-actions { display: flex; justify-content: center; gap: 28px; margin-top: 18px; }
 .login-note { margin: 4px 0 0; text-align: center; font-size: 11px; letter-spacing: 0.1em; color: var(--ink-pale); }
 
 .account-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; letter-spacing: 0.1em; color: var(--ink-soft); }

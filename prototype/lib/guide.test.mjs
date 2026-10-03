@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { advance, birthFromForm, initialState, sanitizeState, templateReading } from './guide.mjs';
+import { advance, birthFromForm, initialState, needsAccount, sanitizeState, templateReading } from './guide.mjs';
 
 const now = new Date(2026, 9, 2);
 const types = (result) => result.steps.map((step) => step.card?.kind ?? step.type);
@@ -253,4 +253,17 @@ test('sanitizeState drops malformed client state', () => {
   assert.equal(state.horizon, 3);
   assert.deepEqual(state.birth, { gender: 'female', time: '07:00' });
   assert.equal(state.lean.until, null);
+});
+
+test('须登录：问事与择法不拦，填生辰、掷钱与结果才拦', () => {
+  assert.equal(needsAccount(talk('要不要换工作')), false);
+  assert.equal(needsAccount(talk(MING)), false);
+  // 选定观命、尚无生辰：先登录，老用户的生辰随账号回来。
+  assert.equal(needsAccount(talk(MING, '要不要换工作')), true);
+  assert.equal(needsAccount(talk(GUA, '要不要换工作')), true);
+  // 带着生辰来，同样先登录，再核生辰。
+  assert.equal(needsAccount(talk(`要不要换工作 我${BIRTH}`, MING)), true);
+  // 已有生辰：直接出解读，自然要登录。
+  const state = advance({ state: initialState(), profile: PROFILE, action: MING.action, now }).state;
+  assert.equal(needsAccount(advance({ state, profile: PROFILE, message: '要不要表白', now })), true);
 });

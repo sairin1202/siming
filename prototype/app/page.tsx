@@ -13,7 +13,7 @@ import { BirthForm, type BirthFormValue } from '@/components/siming/birth-form';
 import { ChartCasting } from '@/components/siming/casting';
 import { CastRitual, GuaFigure, type GuaCardData } from '@/components/siming/ritual';
 import { Guide, type GuideMood } from '@/components/siming/guide';
-import { LoginDialog, type Account } from '@/components/siming/login';
+import { LoginDialog, StrayDialog, type Account } from '@/components/siming/login';
 import { dropOnWater } from '@/components/siming/ripples';
 import { InkScene } from '@/components/siming/scene';
 import { InkWriting, toHanNumerals } from '@/components/siming/writing';
@@ -82,7 +82,8 @@ type SendBody = {
   action?: { type: string; choice?: string; birth?: BirthFormValue; tosses?: number[]; mode?: Mode };
 };
 
-const LOGIN_REASON = '卦辞与命理须验明来者方可示之。';
+const LOGIN_REASON = '验明来者，方可推演。';
+const ACCOUNT_REASON = '登录后，生辰与所问之录随账号保存，换一台设备也不必重填。';
 
 const GREETING = '夜阑人静\n君心有疑 不妨言之';
 const INITIAL_STATE: GuideState = {
@@ -98,6 +99,11 @@ const INITIAL_STATE: GuideState = {
 };
 const KEYS = { profile: 'siming.profile', session: 'siming.session', records: 'siming.records' };
 const OUTCOMES = { good: '顺', okay: '平', bad: '逆' } as const;
+const PANEL_TITLES = {
+  records: { title: '所问之录', label: '回看' },
+  profile: { title: '生辰', label: '我的生辰' },
+  account: { title: '名籍', label: '我的账号' },
+} as const;
 
 type Verse = { key: string; echo: Message | null; items: Message[] };
 
@@ -165,11 +171,14 @@ export default function Page() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState(false);
-  const [panel, setPanel] = useState<'records' | 'profile' | null>(null);
+  const [panel, setPanel] = useState<'records' | 'profile' | 'account' | null>(null);
   const [hydrated, setHydrated] = useState(false);
   // undefined while the session is being checked.
   const [account, setAccount] = useState<Account | null | undefined>(undefined);
-  const [loginOpen, setLoginOpen] = useState(false);
+  // Why the login dialog is open; null when closed.
+  const [loginReason, setLoginReason] = useState<string | null>(null);
+  // A birth or records this device kept without an account, offered to the account just signed in.
+  const [stray, setStray] = useState<{ birth: Birth | null; records: DecisionRecord[] } | null>(null);
   // The request that was held back for sign-in; sent again once signed in.
   const pendingRef = useRef<SendBody | null>(null);
   // Read when saving a record, which may happen in a retry sent right after sign-in.
@@ -210,29 +219,38 @@ export default function Page() {
     setHydrated(true);
   }, []);
 
-  /** Bring this device's records into the account, then show the account's. */
-  const syncRecords = useCallback(async () => {
-    const local = load<DecisionRecord[]>(KEYS.records, []);
-    try {
-      const result = local.length
-        ? await requestRecords({ method: 'POST', body: { records: local } })
-        : await requestRecords();
-      if (local.length) save(KEYS.records, null);
-      setRecords(result.records ?? []);
-    } catch {
-      // Keep showing what this device has; the next sign-in tries again.
-    }
+  /**
+   * Take up a signed-in account: its birth and records replace this device's.
+   * Returns true when this device holds a birth or records of its own to offer.
+   */
+  const takeAccount = useCallback((user: Account, birth: Birth | null) => {
+    accountRef.current = user;
+    setAccount(user);
+    setProfile(birth);
+    if (birth) save(KEYS.profile, birth);
+    requestRecords()
+      .then((result) => setRecords(result.records ?? []))
+      .catch(() => setRecords([]));
+    const localRecords = load<DecisionRecord[]>(KEYS.records, []);
+    const localBirth = birth ? null : load<Birth | null>(KEYS.profile, null);
+    if (!localRecords.length && !localBirth) return false;
+    setStray({ birth: localBirth, records: localRecords });
+    return true;
   }, []);
 
   useEffect(() => {
     fetch('/api/auth/me')
-      .then((response) => (response.ok ? (response.json() as Promise<{ user: Account | null }>) : { user: null }))
-      .then(({ user }) => {
-        setAccount(user);
-        if (user) void syncRecords();
+      .then((response) =>
+        response.ok
+          ? (response.json() as Promise<{ user: Account | null; birth: Birth | null }>)
+          : { user: null, birth: null },
+      )
+      .then(({ user, birth }) => {
+        if (user) takeAccount(user, birth);
+        else setAccount(null);
       })
       .catch(() => setAccount(null));
-  }, [syncRecords]);
+  }, [takeAccount]);
 
   useEffect(() => {
     if (hydrated && !busy) save(KEYS.session, { messages, state, pending: pendingRef.current });
@@ -342,11 +360,12 @@ export default function Page() {
           case 'auth':
             needsLogin = true;
             pendingRef.current = body;
+            accountRef.current = null;
             setAccount(null);
-            setLoginOpen(true);
+            setLoginReason(LOGIN_REASON);
             setMessages((current) => [
               ...current,
-              { id: newId(), from: 'guide', text: '天机不可轻示\n验明来者 方见其辞' },
+              { id: newId(), from: 'guide', text: '天机不可轻示\n验明来者 方可推演' },
               { id: newId(), from: 'guide', card: { kind: 'login' } },
             ]);
             break;
@@ -425,28 +444,71 @@ export default function Page() {
     sendRef.current = send;
   }, [send]);
 
-  const onSignedIn = (signedIn: Account) => {
-    accountRef.current = signedIn;
-    setAccount(signedIn);
-    setLoginOpen(false);
-    void syncRecords();
+  /** Send the request that was held back for sign-in. */
+  const resumePending = () => {
     const pending = pendingRef.current;
     pendingRef.current = null;
-    setMessages((current) => current.filter((message) => message.card?.kind !== 'login'));
-    // Wait a tick so `send` sees the signed-in account and the cleared verse.
+    // Wait a tick so `send` sees the signed-in account, its birth and the cleared verse.
     if (pending) setTimeout(() => void sendRef.current(pending), 0);
   };
 
+  const onSignedIn = (signedIn: Account, birth: unknown) => {
+    setLoginReason(null);
+    setMessages((current) => current.filter((message) => message.card?.kind !== 'login'));
+    // Ask about this device's own birth and records first, so the retry reads with the right birth.
+    if (!takeAccount(signedIn, (birth as Birth | null) ?? null)) resumePending();
+  };
+
+  const resolveStray = async (merge: boolean) => {
+    const found = stray;
+    setStray(null);
+    if (found?.birth) {
+      if (merge) {
+        setProfile(found.birth);
+        void fetch('/api/profile', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ birth: found.birth }),
+        }).catch(() => null);
+      } else {
+        save(KEYS.profile, null);
+      }
+    }
+    if (found?.records.length) {
+      if (merge) {
+        try {
+          const result = await requestRecords({ method: 'POST', body: { records: found.records } });
+          setRecords(result.records ?? []);
+          save(KEYS.records, null);
+        } catch {
+          // They stay on this device and are offered again next time.
+        }
+      } else {
+        save(KEYS.records, null);
+      }
+    }
+    resumePending();
+  };
+
   const closeLogin = () => {
-    setLoginOpen(false);
+    setLoginReason(null);
     // A cast waiting on sign-in can be thrown again later.
     if (pendingRef.current?.action?.type === 'cast') setRitualOpen(false);
   };
 
   const signOut = async () => {
+    // Records that failed to save earlier get one more try before this device forgets them.
+    const unsaved = load<DecisionRecord[]>(KEYS.records, []);
+    if (unsaved.length) await requestRecords({ method: 'POST', body: { records: unsaved } }).catch(() => null);
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
+    // Leave nothing of this account on a shared device: birth, records and the open reading.
+    for (const key of Object.values(KEYS)) save(key, null);
+    accountRef.current = null;
     setAccount(null);
-    setRecords(load<DecisionRecord[]>(KEYS.records, []));
+    setProfile(null);
+    setRecords([]);
+    setPanel(null);
+    restart();
   };
 
   const submit = () => {
@@ -467,6 +529,7 @@ export default function Page() {
 
   const forgetProfile = () => {
     save(KEYS.profile, null);
+    if (account) void fetch('/api/profile', { method: 'DELETE' }).catch(() => null);
     setProfile(null);
     setPanel(null);
     restart();
@@ -502,6 +565,14 @@ export default function Page() {
           <span>司命<small>问时</small></span>
         </button>
         <nav>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => (account ? setPanel('account') : setLoginReason(ACCOUNT_REASON))}
+            aria-label={account ? '我的账号' : '登录'}
+          >
+            名
+          </button>
           <button type="button" className="icon-button" onClick={() => setPanel('records')} aria-label="回看">
             录
           </button>
@@ -538,7 +609,7 @@ export default function Page() {
                 onConfirm={() => void send({ action: { type: 'confirm_birth' } }, '是的')}
                 onEdit={() => void send({ action: { type: 'edit_birth' } }, '要改')}
                 onBirthSubmit={(birth, summary) => void send({ action: { type: 'submit_birth', birth } }, summary)}
-                onLogin={() => setLoginOpen(true)}
+                onLogin={() => setLoginReason(LOGIN_REASON)}
               />
             </div>
             {leaving && (
@@ -618,7 +689,14 @@ export default function Page() {
           onClose={() => setRitualOpen(false)}
         />
       )}
-      {loginOpen && <LoginDialog reason={LOGIN_REASON} onDone={onSignedIn} onClose={closeLogin} />}
+      {loginReason && <LoginDialog reason={loginReason} onDone={onSignedIn} onClose={closeLogin} />}
+      {stray && (
+        <StrayDialog
+          birth={Boolean(stray.birth)}
+          records={stray.records.length}
+          onChoose={(merge) => void resolveStray(merge)}
+        />
+      )}
       {farewell && (
         <video
           className="scene-moment"
@@ -634,18 +712,30 @@ export default function Page() {
       {panel && (
         <>
           <button type="button" className="drawer-backdrop" onClick={() => setPanel(null)} aria-label="关闭" />
-          <aside className="drawer" aria-label={panel === 'records' ? '回看' : '我的生辰'}>
+          <aside className="drawer" aria-label={PANEL_TITLES[panel].label}>
             <div className="drawer-head">
-              <h2>{panel === 'records' ? '所问之录' : '生辰'}</h2>
+              <h2>{PANEL_TITLES[panel].title}</h2>
               <button type="button" className="icon-button" onClick={() => setPanel(null)} aria-label="关闭">
                 收
               </button>
             </div>
-            {panel === 'profile' ? (
+            {panel === 'account' ? (
+              <div className="drawer-body">
+                {account && (
+                  <p className="account-line">
+                    {account.email}
+                    <button type="button" className="ink-link" onClick={() => void signOut()}>
+                      退出
+                    </button>
+                  </p>
+                )}
+                <p className="muted">生辰与所问之录随账号保存。退出后，此机不留痕迹。</p>
+              </div>
+            ) : panel === 'profile' ? (
               profile ? (
                 <div className="drawer-body">
                   <p className="profile-line">{birthSummary(profile)}</p>
-                  <p className="muted">生辰只存于此机，用以推演，不作他用。</p>
+                  <p className="muted">{account ? '生辰随账号保存' : '生辰暂存此机'}，用以推演，不作他用。</p>
                   <button type="button" className="ink-link" onClick={forgetProfile}>
                     忘却生辰
                   </button>
@@ -657,21 +747,14 @@ export default function Page() {
               )
             ) : (
               <div className="drawer-body">
-                {account ? (
+                {account === null && (
                   <p className="account-line">
-                    {account.email} 所问之录随账号保存
-                    <button type="button" className="ink-link" onClick={() => void signOut()}>
-                      退出
-                    </button>
-                  </p>
-                ) : account === null ? (
-                  <p className="account-line">
-                    所问之录暂存此机，登录后随账号保存
-                    <button type="button" className="ink-link" onClick={() => setLoginOpen(true)}>
+                    登录后，所问之录随账号保存
+                    <button type="button" className="ink-link" onClick={() => setLoginReason(ACCOUNT_REASON)}>
                       登录
                     </button>
                   </p>
-                ) : null}
+                )}
                 {records.length === 0 && <p className="muted">尚无所问。</p>}
                 <ul className="records">
                   {records.map((record) => (
