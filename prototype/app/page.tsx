@@ -14,6 +14,7 @@ import { ChartCasting } from '@/components/siming/casting';
 import { CastRitual, GuaFigure, type GuaCardData } from '@/components/siming/ritual';
 import { Guide, type GuideMood } from '@/components/siming/guide';
 import { LoginDialog, StrayDialog, type Account } from '@/components/siming/login';
+import { MusicToggle } from '@/components/siming/music';
 import { dropOnWater } from '@/components/siming/ripples';
 import { InkScene } from '@/components/siming/scene';
 import { InkWriting, toHanNumerals } from '@/components/siming/writing';
@@ -565,6 +566,7 @@ export default function Page() {
           <span>司命<small>问时</small></span>
         </button>
         <nav>
+          <MusicToggle />
           <button
             type="button"
             className="icon-button"
