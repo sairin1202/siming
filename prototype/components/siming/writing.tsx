@@ -1,5 +1,28 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+// The writing shrinks to fit the paper, but no smaller than this.
+const MIN_FONT_PX = 14;
+
+/**
+ * Shrink the writing until every column fits on the page, so a reading never
+ * scrolls sideways. Cells are sized in em, so one font size moves them all.
+ */
+function fitToPage(element: HTMLElement) {
+  element.style.fontSize = '';
+  const base = parseFloat(getComputedStyle(element).fontSize);
+  const overflows = () => element.scrollWidth > element.clientWidth + 1;
+  if (!overflows()) return;
+  let low = Math.min(MIN_FONT_PX, base);
+  let high = base;
+  while (high - low > 0.5) {
+    const middle = (low + high) / 2;
+    element.style.fontSize = `${middle}px`;
+    if (overflows()) high = middle;
+    else low = middle;
+  }
+  element.style.fontSize = `${Math.floor(low)}px`;
+}
+
 type Token = { kind: 'char'; text: string } | { kind: 'pause' } | { kind: 'para' };
 
 type StrokeData = { strokes: string[]; medians: number[][][] } | null;
@@ -101,14 +124,12 @@ function planStrokes(data: NonNullable<StrokeData>, pace: number): { strokes: St
 function BrushGlyph({
   index,
   char,
-  size,
   animate,
   pace,
   onDone,
 }: {
   index: number;
   char: string;
-  size: number;
   animate: boolean;
   pace: number;
   onDone: () => void;
@@ -165,14 +186,12 @@ function BrushGlyph({
     </g>
   );
 
-  if (data === undefined) return <span className="brush-glyph" data-token={index} style={{ width: size, height: size }} />;
+  if (data === undefined) return <span className="brush-glyph" data-token={index} />;
 
   return (
     <svg
       className="brush-glyph"
       data-token={index}
-      width={size}
-      height={size}
       viewBox="0 0 1024 1024"
       aria-hidden="true"
     >
@@ -242,7 +261,6 @@ export function InkWriting({
   const tokens = useMemo(() => tokenize(text), [text]);
   const [count, setCount] = useState(instant ? Number.MAX_SAFE_INTEGER : 0);
   const [skipFrom, setSkipFrom] = useState<number | null>(null);
-  const [size, setSize] = useState(30);
   const [ready, setReady] = useState(instant);
   const shown = Math.min(count, tokens.length);
   const ref = useRef<HTMLDivElement>(null);
@@ -265,13 +283,23 @@ export function InkWriting({
     setCount(Number.MAX_SAFE_INTEGER);
   };
 
-  // Character size follows the CSS font size of the writing area.
-  useEffect(() => {
-    if (ref.current) {
-      // oxlint-disable-next-line react/react-compiler
-      setSize(Math.round(parseFloat(getComputedStyle(ref.current).fontSize)));
-    }
-  }, []);
+  // Fit the whole text on the page, again when the page changes width or
+  // cards arriving beside the writing squeeze it.
+  useLayoutEffect(() => {
+    const element = ref.current;
+    const page = element?.parentElement;
+    if (!element || !page) return;
+    fitToPage(element);
+    let width = page.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (page.clientWidth === width && element.scrollWidth <= element.clientWidth + 1) return;
+      width = page.clientWidth;
+      fitToPage(element);
+    });
+    observer.observe(page);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [tokens]);
 
   // Have stroke data and the brush font's glyphs in hand before the first stroke.
   useEffect(() => {
@@ -333,14 +361,13 @@ export function InkWriting({
           if (token.kind === 'pause') return <span key={index} className="ink-pause" />;
           // Not yet written: an empty cell holding the character's place.
           if (!ready || index >= shown) {
-            return <span key={index} className="brush-glyph" style={{ width: size, height: size }} />;
+            return <span key={index} className="brush-glyph" />;
           }
           return (
             <BrushGlyph
               key={index}
               index={index}
               char={token.text}
-              size={size}
               pace={pace}
               animate={!instant && (skipFrom === null || index < skipFrom)}
               onDone={() => setTimeout(() => advance(index), 60)}

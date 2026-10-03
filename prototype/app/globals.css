@@ -448,6 +448,8 @@ button { cursor: pointer; }
 .verse.is-error .ink-writing { color: #5a2a22; }
 .brush-glyph {
   display: inline-block;
+  width: 1em;
+  height: 1em;
   vertical-align: top;
   margin-inline-end: 0.08em;
   overflow: visible;
@@ -498,17 +500,18 @@ button { cursor: pointer; }
 }
 .verse-thinking { display: flex; justify-content: center; padding: 6px 0; animation: ink 600ms ease-out var(--enter) both; }
 
-/* Ink blooming in water, feathered into a round pool so no edge of the clip shows. */
-.ink-thinking { display: block; flex: none; }
+/* A sea of ink cloud turning, wide and faint, its edges dissolved into the paper. */
+.ink-thinking { display: block; flex: none; aspect-ratio: 16 / 9; pointer-events: none; }
 .ink-thinking video {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  opacity: 0.88;
   mix-blend-mode: multiply;
-  -webkit-mask-image: radial-gradient(circle, #000 28%, transparent 71%);
-  mask-image: radial-gradient(circle, #000 28%, transparent 71%);
-  animation: fade 900ms ease both;
+  -webkit-mask-image: radial-gradient(ellipse 50% 50% at center, #000 40%, transparent 100%);
+  mask-image: radial-gradient(ellipse 50% 50% at center, #000 40%, transparent 100%);
+  animation: fade 1.6s ease both;
 }
 
 /* ---------- Cards ---------- */
