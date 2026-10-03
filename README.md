@@ -28,9 +28,25 @@
 | `prototype/lib/guide.mjs` | 对话阶段：问心 → 择法（起卦 / 观命）→ 起卦：掷钱成卦；观命：生辰帖与确认 → 解读 → 追问 → 决定 |
 | `prototype/lib/agent.mjs` | 解读与追问的模型提示词、安全分流 |
 | `prototype/app/api/guide/route.ts` | 流式接口；未配置模型或模型失败时用本地文案兜底 |
-| `prototype/app/page.tsx`、`components/siming/` | 水墨山水场景、毛笔八卦、对话与卡片 |
+| `prototype/app/page.tsx`、`components/siming/` | 水墨山水场景、毛笔八卦、对话与卡片；`login.tsx` 为手机验证码登录框 |
+| `prototype/lib/aliyun-sms.mjs` | 阿里云号码认证服务 · 短信认证（`SendSmsVerifyCode` / `CheckSmsVerifyCode`），RPC 签名直接调用，不依赖 SDK |
+| `prototype/lib/db.mjs`、`lib/auth.mjs` | SQLite（Node 内置 `node:sqlite`）中的用户、登录会话、问事记录与发码频率限制；会话 cookie 与手机号校验 |
+| `prototype/app/api/auth/*`、`app/api/records` | 发码、登录、当前用户、退出；问事记录的读取、保存与标记 |
 
-生辰、当前对话和决定记录只保存在用户浏览器的 localStorage 中，可在「我的生辰」里一键忘掉。
+## 登录与记录
+
+- 问事、择法、填生辰都不需要登录；**出结果时须登录**：卦象、命盘、解读、追问和吉日都由服务端把关，未登录时 `/api/guide` 只返回 `auth` 事件且不推进对话，前端弹出登录框，登录后原样重发这一步。
+- 登录用手机号 + 短信验证码，首次登录即注册。验证码由阿里云生成和校验，本服务不保存验证码。会话令牌只存其 SHA-256，cookie 为 `HttpOnly; SameSite=Lax`（HTTPS 下加 `Secure`），有效期 30 天。
+- 频率限制：每个号码 60 秒一次、每天 10 次；每个 IP 每小时 30 次；每个号码 10 分钟内错 5 次即暂停校验。阿里云侧另有自己的限流。
+- 问事记录（含司命之辞）随账号存于服务端，换设备登录也能看到；登录时会把本机 localStorage 里的旧记录并入账号。生辰仍只存于本机。
+
+### 阿里云配置
+
+1. 开通[号码认证服务](https://dypns.console.aliyun.com/)，在「短信认证」中查看赠送的签名名称和模板 CODE（模板需包含 `${code}` 和 `${min}`）。
+2. 在 RAM 新建子账号，只授予 `AliyunDypnsFullAccess`，生成 AccessKey。
+3. 在 `.env` 填写 `ALIYUN_ACCESS_KEY_ID`、`ALIYUN_ACCESS_KEY_SECRET`、`ALIYUN_SMS_SIGN_NAME`、`ALIYUN_SMS_TEMPLATE_CODE`。部署脚本会检查这四项。
+
+本地开发不想真发短信时，在 `.env` 加 `SMS_MOCK=1`，验证码固定为 `000000`（生产环境开启会直接报错）。
 
 ## 画面素材
 
@@ -86,7 +102,8 @@ ENV_FILE=/path/to/server.env ./deploy/deploy.sh --update-env
 /opt/angel_devil/
 ├── current -> releases/<版本号>
 ├── releases/<版本号>/       # 源码、Linux 依赖和生产构建
-└── shared/.env              # 仅 root 和服务账号可读
+├── shared/.env              # 仅 root 和服务账号可读
+└── shared/data/siming.db    # 用户、会话与问事记录（SQLite，跨版本保留，请定期备份）
 ```
 
 默认访问地址为 `http://212.64.23.79:3000`，需要在服务器防火墙及腾讯云安全组允许 TCP 3000。可用 `APP_PORT=其他端口` 覆盖。服务由专用账号 `angel-devil` 运行，systemd 提供开机启动和异常重启。在服务器查看状态与日志：

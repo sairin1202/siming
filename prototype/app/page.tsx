@@ -13,6 +13,7 @@ import { BirthForm, type BirthFormValue } from '@/components/siming/birth-form';
 import { ChartCasting } from '@/components/siming/casting';
 import { CastRitual, GuaFigure, type GuaCardData } from '@/components/siming/ritual';
 import { Guide, type GuideMood } from '@/components/siming/guide';
+import { LoginDialog, type Account } from '@/components/siming/login';
 import { dropOnWater } from '@/components/siming/ripples';
 import { InkScene } from '@/components/siming/scene';
 import { InkWriting, toHanNumerals } from '@/components/siming/writing';
@@ -35,11 +36,14 @@ type GuideState = {
 type Mode = 'gua' | 'ming';
 const MODE_LABELS: Record<Mode, string> = { gua: '起卦', ming: '观命' };
 
+/** Shown in place of a result when the visitor has not signed in. */
+type LoginCardData = { kind: 'login' };
+
 type Message = {
   id: string;
   from: 'guide' | 'user';
   text?: string;
-  card?: CardData;
+  card?: CardData | LoginCardData;
   streaming?: boolean;
   error?: boolean;
 };
@@ -57,6 +61,8 @@ type DecisionRecord = {
   /** 本卦, or 本卦之之卦 when lines changed. */
   gua?: string;
   mode?: Mode;
+  /** What the guide said before the choice. */
+  reading?: string;
 };
 
 type GuideEvent =
@@ -68,7 +74,15 @@ type GuideEvent =
   | { type: 'delta'; content: string }
   | { type: 'end' }
   | { type: 'done' }
+  | { type: 'auth' }
   | { type: 'error'; message: string };
+
+type SendBody = {
+  message?: string;
+  action?: { type: string; choice?: string; birth?: BirthFormValue; tosses?: number[]; mode?: Mode };
+};
+
+const LOGIN_REASON = '卦辞与命理须验明手机方可示之。';
 
 const GREETING = '夜阑人静\n君心有疑 不妨言之';
 const INITIAL_STATE: GuideState = {
@@ -121,6 +135,16 @@ function save(key: string, value: unknown) {
   }
 }
 
+async function requestRecords(init?: { method: 'POST' | 'PATCH'; body: unknown }) {
+  const response = await fetch('/api/records', {
+    method: init?.method ?? 'GET',
+    headers: init ? { 'Content-Type': 'application/json' } : undefined,
+    body: init ? JSON.stringify(init.body) : undefined,
+  });
+  if (!response.ok) throw new Error(`records ${response.status}`);
+  return (await response.json()) as { records?: DecisionRecord[] };
+}
+
 function birthSummary(birth: Birth) {
   const [year, month, day] = birth.date.split('-').map(Number);
   return toHanNumerals(
@@ -143,6 +167,16 @@ export default function Page() {
   const [streaming, setStreaming] = useState(false);
   const [panel, setPanel] = useState<'records' | 'profile' | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  // undefined while the session is being checked.
+  const [account, setAccount] = useState<Account | null | undefined>(undefined);
+  const [loginOpen, setLoginOpen] = useState(false);
+  // The request that was held back for sign-in; sent again once signed in.
+  const pendingRef = useRef<SendBody | null>(null);
+  // Read when saving a record, which may happen in a retry sent right after sign-in.
+  const accountRef = useRef<Account | null | undefined>(undefined);
+  useEffect(() => {
+    accountRef.current = account;
+  }, [account]);
   const [casting, setCasting] = useState<ChartCardData | null>(null);
   // The coin-casting ritual: open while the user stills, throws and watches the hexagram form.
   const [ritualOpen, setRitualOpen] = useState(false);
@@ -166,7 +200,8 @@ export default function Page() {
     // oxlint-disable-next-line react/react-compiler
     setProfile(load<Birth | null>(KEYS.profile, null));
     setRecords(load<DecisionRecord[]>(KEYS.records, []));
-    const session = load<{ messages: Message[]; state: GuideState } | null>(KEYS.session, null);
+    const session = load<{ messages: Message[]; state: GuideState; pending?: SendBody | null } | null>(KEYS.session, null);
+    pendingRef.current = session?.pending ?? null;
     if (session?.messages?.length) {
       // The restored verse is brushed again from the first stroke.
       setMessages(session.messages.filter((message) => !message.streaming));
@@ -175,8 +210,32 @@ export default function Page() {
     setHydrated(true);
   }, []);
 
+  /** Bring this device's records into the account, then show the account's. */
+  const syncRecords = useCallback(async () => {
+    const local = load<DecisionRecord[]>(KEYS.records, []);
+    try {
+      const result = local.length
+        ? await requestRecords({ method: 'POST', body: { records: local } })
+        : await requestRecords();
+      if (local.length) save(KEYS.records, null);
+      setRecords(result.records ?? []);
+    } catch {
+      // Keep showing what this device has; the next sign-in tries again.
+    }
+  }, []);
+
   useEffect(() => {
-    if (hydrated && !busy) save(KEYS.session, { messages, state });
+    fetch('/api/auth/me')
+      .then((response) => (response.ok ? (response.json() as Promise<{ user: Account | null }>) : { user: null }))
+      .then(({ user }) => {
+        setAccount(user);
+        if (user) void syncRecords();
+      })
+      .catch(() => setAccount(null));
+  }, [syncRecords]);
+
+  useEffect(() => {
+    if (hydrated && !busy) save(KEYS.session, { messages, state, pending: pendingRef.current });
   }, [messages, state, busy, hydrated]);
 
   const scrolledOnce = useRef(false);
@@ -212,7 +271,7 @@ export default function Page() {
           : 'idle';
 
   const send = useCallback(
-    async (body: { message?: string; action?: { type: string; choice?: string; birth?: BirthFormValue; tosses?: number[]; mode?: Mode } }, display?: string) => {
+    async (body: SendBody, display?: string) => {
       if (busy) return;
       const history = messages
         .filter((message) => message.text && !message.error)
@@ -229,6 +288,7 @@ export default function Page() {
       let streamingId: string | null = null;
       let spoke = false;
       let pickedDays: string[] = [];
+      let needsLogin = false;
 
       const apply = (event: GuideEvent) => {
         switch (event.type) {
@@ -279,6 +339,17 @@ export default function Page() {
             );
             break;
           }
+          case 'auth':
+            needsLogin = true;
+            pendingRef.current = body;
+            setAccount(null);
+            setLoginOpen(true);
+            setMessages((current) => [
+              ...current,
+              { id: newId(), from: 'guide', text: '天机不可轻示\n验明来者 方见其辞' },
+              { id: newId(), from: 'guide', card: { kind: 'login' } },
+            ]);
+            break;
           case 'error':
             setMessages((current) => [...current, { id: newId(), from: 'guide', text: event.message, error: true }]);
             break;
@@ -311,9 +382,10 @@ export default function Page() {
             apply(JSON.parse(chunk.slice(5)) as GuideEvent);
           }
         }
-        if (body.action?.type === 'decide' && state.question) {
+        if (body.action?.type === 'decide' && state.question && !needsLogin) {
           setFarewell(true);
           const lastGua = [...messages].reverse().find((message) => message.card?.kind === 'gua')?.card;
+          const reading = [...messages].reverse().find((message) => message.from === 'guide' && message.text?.trim() && !message.error)?.text;
           const record: DecisionRecord = {
             id: newId(),
             question: state.question,
@@ -326,12 +398,13 @@ export default function Page() {
               lastGua?.kind === 'gua'
                 ? `${lastGua.present.name}${lastGua.future ? `之${lastGua.future.name}` : ''}`
                 : undefined,
+            reading: reading?.slice(0, 2_000),
           };
-          setRecords((current) => {
-            const next = [record, ...current].slice(0, 50);
-            save(KEYS.records, next);
-            return next;
-          });
+          setRecords((current) => [record, ...current].slice(0, 200));
+          // Signed in: kept with the account. Otherwise (or if saving fails) on this device.
+          const keepLocally = () => save(KEYS.records, [record, ...load<DecisionRecord[]>(KEYS.records, [])].slice(0, 50));
+          if (accountRef.current) requestRecords({ method: 'POST', body: { records: [record] } }).catch(keepLocally);
+          else keepLocally();
         }
       } catch (error) {
         if ((error as Error).name !== 'AbortError') {
@@ -346,6 +419,36 @@ export default function Page() {
     [busy, messages, profile, state, fadeOut],
   );
 
+  // The latest `send`, for retrying after sign-in from a stale closure.
+  const sendRef = useRef(send);
+  useEffect(() => {
+    sendRef.current = send;
+  }, [send]);
+
+  const onSignedIn = (signedIn: Account) => {
+    accountRef.current = signedIn;
+    setAccount(signedIn);
+    setLoginOpen(false);
+    void syncRecords();
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+    setMessages((current) => current.filter((message) => message.card?.kind !== 'login'));
+    // Wait a tick so `send` sees the signed-in account and the cleared verse.
+    if (pending) setTimeout(() => void sendRef.current(pending), 0);
+  };
+
+  const closeLogin = () => {
+    setLoginOpen(false);
+    // A cast waiting on sign-in can be thrown again later.
+    if (pendingRef.current?.action?.type === 'cast') setRitualOpen(false);
+  };
+
+  const signOut = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
+    setAccount(null);
+    setRecords(load<DecisionRecord[]>(KEYS.records, []));
+  };
+
   const submit = () => {
     const text = input.trim();
     if (!text || busy) return;
@@ -355,6 +458,7 @@ export default function Page() {
 
   const restart = () => {
     abortRef.current?.abort();
+    pendingRef.current = null;
     fadeOut(verseOf(messages));
     setMessages(greetingMessages());
     setState(INITIAL_STATE);
@@ -369,11 +473,15 @@ export default function Page() {
   };
 
   const markOutcome = (id: string, outcome: DecisionRecord['outcome']) => {
-    setRecords((current) => {
-      const next = current.map((record) => (record.id === id ? { ...record, outcome } : record));
-      save(KEYS.records, next);
-      return next;
-    });
+    setRecords((current) => current.map((record) => (record.id === id ? { ...record, outcome } : record)));
+    if (account) {
+      void requestRecords({ method: 'PATCH', body: { id, outcome } }).catch(() => null);
+    } else {
+      save(
+        KEYS.records,
+        load<DecisionRecord[]>(KEYS.records, []).map((record) => (record.id === id ? { ...record, outcome } : record)),
+      );
+    }
   };
 
   const verse = verseOf(messages);
@@ -430,6 +538,7 @@ export default function Page() {
                 onConfirm={() => void send({ action: { type: 'confirm_birth' } }, '是的')}
                 onEdit={() => void send({ action: { type: 'edit_birth' } }, '要改')}
                 onBirthSubmit={(birth, summary) => void send({ action: { type: 'submit_birth', birth } }, summary)}
+                onLogin={() => setLoginOpen(true)}
               />
             </div>
             {leaving && (
@@ -509,6 +618,7 @@ export default function Page() {
           onClose={() => setRitualOpen(false)}
         />
       )}
+      {loginOpen && <LoginDialog reason={LOGIN_REASON} onDone={onSignedIn} onClose={closeLogin} />}
       {farewell && (
         <video
           className="scene-moment"
@@ -547,6 +657,21 @@ export default function Page() {
               )
             ) : (
               <div className="drawer-body">
+                {account ? (
+                  <p className="account-line">
+                    {account.phone} 所问之录随账号保存
+                    <button type="button" className="ink-link" onClick={() => void signOut()}>
+                      退出
+                    </button>
+                  </p>
+                ) : account === null ? (
+                  <p className="account-line">
+                    所问之录暂存此机，登录后随账号保存
+                    <button type="button" className="ink-link" onClick={() => setLoginOpen(true)}>
+                      登录
+                    </button>
+                  </p>
+                ) : null}
                 {records.length === 0 && <p className="muted">尚无所问。</p>}
                 <ul className="records">
                   {records.map((record) => (
@@ -561,6 +686,12 @@ export default function Page() {
                         {record.gua ? ` · ${record.gua}` : ''}
                         {record.lean ? ` · ${{ go: '宜行', wait: '待时', stop: '宜止' }[record.lean]}` : ''}
                       </p>
+                      {record.reading && (
+                        <details className="record-reading">
+                          <summary>司命之辞</summary>
+                          <p>{record.reading}</p>
+                        </details>
+                      )}
                       <div className="record-outcome">
                         <span>其后</span>
                         {(Object.keys(OUTCOMES) as Array<keyof typeof OUTCOMES>).map((key) => (
@@ -607,6 +738,7 @@ function VerseView({
   onConfirm = () => {},
   onEdit = () => {},
   onBirthSubmit = () => {},
+  onLogin = () => {},
 }: {
   verse: Verse;
   entering: boolean;
@@ -622,6 +754,7 @@ function VerseView({
   onConfirm?: () => void;
   onEdit?: () => void;
   onBirthSubmit?: (birth: BirthFormValue, summary: string) => void;
+  onLogin?: () => void;
 }) {
   const [written, setWritten] = useState(instant);
   const textMessages = verse.items.filter((message) => !message.card && message.text?.trim());
@@ -688,6 +821,13 @@ function VerseView({
                   <button type="button" className="mode-seal is-light" disabled={!modesActive} onClick={() => onPickMode('ming')}>
                     观命
                     <small>依其生辰 观其时运</small>
+                  </button>
+                </div>
+              )}
+              {card?.kind === 'login' && (
+                <div className="login-invite">
+                  <button type="button" className="cast-invite" disabled={instant} onClick={onLogin}>
+                    验明
                   </button>
                 </div>
               )}
