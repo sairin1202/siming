@@ -250,7 +250,8 @@ export function InkWriting({
   const advanced = useRef(-2); // index of the last token we moved past; -1 means "before the first"
   const chars = tokens.flatMap((token) => (token.kind === 'char' ? [token.text] : []));
   // One brush, one pace: every character waits for the one before it.
-  const pace = 2;
+  // A long reading is written with a quicker hand, so it still finishes in about a minute.
+  const pace = Math.min(6, Math.max(2, chars.length / 35));
 
   // Move past token `from`, revealing the one after it (count = from + 2).
   const advance = (from: number) => {

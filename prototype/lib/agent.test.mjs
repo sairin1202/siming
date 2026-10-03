@@ -25,7 +25,8 @@ test('a hexagram reading carries the hexagram and its words, and nothing of the 
   const [system, user] = buildReadingMessages(payload, 'standard');
   assert.match(system.content, /不得自造经文/);
   assert.match(system.content, /不涉生辰命理/);
-  assert.match(system.content, /不超过四十字/);
+  assert.match(system.content, /写五段/);
+  assert.match(system.content, /一百五十至二百二十字/);
   assert.match(system.content, /不要用任何标点符号/);
   const data = JSON.parse(user.content.slice(user.content.indexOf('{')));
   assert.equal(data.问题, '要不要换工作');
@@ -38,6 +39,7 @@ test('a hexagram reading carries the hexagram and its words, and nothing of the 
 test('a chart reading carries the timing and the fixed lean, and no hexagram', () => {
   const [system, user] = buildReadingMessages(mingPayload, 'standard');
   assert.match(system.content, /不涉卦象/);
+  assert.match(system.content, /一百五十至二百二十字/);
   assert.match(system.content, /不得自造干支/);
   const data = JSON.parse(user.content.slice(user.content.indexOf('{')));
   assert.equal(data.流年, mingPayload.reading.signal.liunian.ganzhi);
@@ -56,4 +58,5 @@ test('follow-up prompt keeps recent history and the question', () => {
   const data = JSON.parse(user.content.slice(user.content.indexOf('{')));
   assert.equal(data.追问, '那下个月呢');
   assert.equal(data.最近对话.length, 8);
+  assert.match(buildFollowupMessages({ ...payload, message: '那下个月呢' }, history, 'standard')[0].content, /四十至八十字/);
 });
