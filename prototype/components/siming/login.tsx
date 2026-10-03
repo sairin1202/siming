@@ -25,7 +25,8 @@ export function LoginDialog({
 }: {
   /** 为何要登录，写在标题下。 */
   reason: string;
-  onDone: (account: Account) => void;
+  /** `birth` is the account's saved birth, or null. */
+  onDone: (account: Account, birth: unknown) => void;
   onClose: () => void;
 }) {
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -66,11 +67,11 @@ export function LoginDialog({
     setPending(true);
     setError(null);
     try {
-      const result = await post<{ user: Account }>(registering ? '/api/auth/register' : '/api/auth/login', {
+      const result = await post<{ user: Account; birth?: unknown }>(registering ? '/api/auth/register' : '/api/auth/login', {
         email: email.trim(),
         password,
       });
-      onDone(result.user);
+      onDone(result.user, result.birth ?? null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -143,7 +144,37 @@ export function LoginDialog({
             {registering ? '去登录' : '注册一个'}
           </button>
         </p>
-        <p className="login-note">所问之录随账号保存。密码暂不能找回，请记牢。</p>
+        <p className="login-note">生辰与所问之录随账号保存。密码暂不能找回，请记牢。</p>
+      </dialog>
+    </>
+  );
+}
+
+/** After sign-in: this device still holds a birth or records with no account. Ask before merging them. */
+export function StrayDialog({
+  birth,
+  records,
+  onChoose,
+}: {
+  birth: boolean;
+  records: number;
+  onChoose: (merge: boolean) => void;
+}) {
+  const what = [birth && '一份生辰', records > 0 && `${records} 条所问`].filter(Boolean).join('与');
+  return (
+    <>
+      <div className="login-backdrop" aria-hidden="true" />
+      <dialog open className="login" aria-modal="true" aria-labelledby="stray-title">
+        <h2 id="stray-title">此机旧录</h2>
+        <p className="muted">此机尚存{what}，未归于任何账号，或为他人所留。</p>
+        <div className="login-actions">
+          <button type="button" className="ink-link" onClick={() => onChoose(true)}>
+            并入此账号
+          </button>
+          <button type="button" className="ink-link" onClick={() => onChoose(false)}>
+            舍去
+          </button>
+        </div>
       </dialog>
     </>
   );

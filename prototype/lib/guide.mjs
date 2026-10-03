@@ -600,6 +600,24 @@ export function advance({ state, profile = null, message, action, facts: provide
   }
 }
 
+// 卦象、命盘、解读、追问和吉日都算「结果」，须登录后才给出。
+const RESULT_CARDS = new Set(['gua', 'chart', 'days']);
+// 填生辰、掷钱之前也先验明来者：老用户登录后生辰随账号回来，不必再填。
+const GATED_PHASES = new Set(['birth', 'confirm', 'cast']);
+
+/** Whether this turn of `advance` may only be shown to a signed-in user. */
+export function needsAccount(result) {
+  return (
+    GATED_PHASES.has(result.state.phase) ||
+    result.steps.some(
+      (step) =>
+        step.type === 'reading' ||
+        step.type === 'followup' ||
+        (step.type === 'card' && RESULT_CARDS.has(step.card?.kind ?? '')),
+    )
+  );
+}
+
 function initialStateWith(state) {
   return { ...initialState(), birth: state.birth, readings: state.readings };
 }

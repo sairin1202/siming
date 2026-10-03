@@ -9,6 +9,7 @@ import {
   createUser,
   deleteSession,
   findUserByEmail,
+  getBirth,
   listRecords,
   logAuthEvent,
   loginBlocked,
@@ -16,10 +17,16 @@ import {
   registerBlocked,
   sanitizeRecord,
   saveRecords,
+  setBirth,
   setOutcome,
   userForToken,
 } from './db.mjs';
 import { checkPassword, hashPassword, verifyPassword } from './password.mjs';
+import { accountBirth, keepBirth } from './profile.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 /** A user and a session, for tests that need someone signed in. */
 function signedIn(db, email, now = Date.now()) {
@@ -134,4 +141,29 @@ test('问事记录：校验、保存、去重与标记', () => {
   assert.equal(setOutcome(db, user.id, 'r1', 'good'), true);
   assert.equal(setOutcome(db, other.id, 'r1', 'bad'), false);
   assert.equal(listRecords(db, user.id)[0].outcome, 'good');
+});
+
+test('生辰随账号：校验、保存、忘却，各账号互不相见', () => {
+  const db = openDb(':memory:');
+  const { user } = signedIn(db, 'a@qq.com');
+  const other = signedIn(db, 'b@qq.com').user;
+  const birth = { date: '1995-03-08', time: '07:00', gender: 'female', place: '杭州', longitude: 120.2 };
+  assert.equal(accountBirth(db, user.id), null);
+  assert.equal(keepBirth(db, user.id, { date: '1995-03-08' }), false);
+  assert.equal(keepBirth(db, user.id, { ...birth, extra: 'ignored' }), true);
+  assert.deepEqual(accountBirth(db, user.id), birth);
+  assert.equal(accountBirth(db, other.id), null);
+  setBirth(db, user.id, null);
+  assert.equal(getBirth(db, user.id), null);
+});
+
+test('旧库补上 birth 列', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'siming-')), 'old.db');
+  const old = new DatabaseSync(path);
+  old.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL, last_login_at INTEGER NOT NULL)');
+  old.close();
+  const db = openDb(path);
+  const user = createUser(db, 'a@qq.com', 'scrypt$x');
+  setBirth(db, user.id, { date: '1995-03-08', time: null, gender: 'male' });
+  assert.deepEqual(getBirth(db, user.id), { date: '1995-03-08', time: null, gender: 'male' });
 });

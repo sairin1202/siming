@@ -1,6 +1,7 @@
 import { clientIp, maskEmail, normalizeEmail, sessionCookie } from '@/lib/auth.mjs';
 import { clearLoginFails, createSession, findUserByEmail, getDb, logAuthEvent, loginBlocked } from '@/lib/db.mjs';
 import { verifyPassword } from '@/lib/password.mjs';
+import { accountBirth } from '@/lib/profile.mjs';
 import { RequestError, assertSameOrigin, errorResponse, readJsonBody } from '@/lib/request.mjs';
 
 /** 用邮箱和密码登录。 */
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
     clearLoginFails(db, email);
     const session = createSession(db, user);
     return Response.json(
-      { user: { email: maskEmail(email) } },
+      { user: { email: maskEmail(email) }, birth: accountBirth(db, user.id) },
       { headers: { 'Cache-Control': 'no-store', 'Set-Cookie': sessionCookie(request, session.token) } },
     );
   } catch (error) {

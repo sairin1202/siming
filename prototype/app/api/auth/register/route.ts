@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     logAuthEvent(db, 'register', email, ip);
     const session = createSession(db, user);
     return Response.json(
-      { user: { email: maskEmail(email) } },
+      { user: { email: maskEmail(email) }, birth: null },
       { headers: { 'Cache-Control': 'no-store', 'Set-Cookie': sessionCookie(request, session.token) } },
     );
   } catch (error) {
