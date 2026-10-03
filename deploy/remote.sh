@@ -13,6 +13,9 @@ SERVICE=angel-devil.service
 APP_USER=angel-devil
 RELEASE="$BASE/releases/$RELEASE_ID"
 SHARED_ENV="$BASE/shared/.env"
+# 用户、登录会话和问事记录；放在 shared 下，跨版本保留。
+DATA_DIR="$BASE/shared/data"
+DB_PATH="$DATA_DIR/siming.db"
 UNIT_FILE="/etc/systemd/system/$SERVICE"
 CHECK_UNIT="angel-devil-check-$RELEASE_ID"
 OLD_RELEASE=''
@@ -58,6 +61,7 @@ runuser -u "$APP_USER" -- "$NODE_BIN" --version >/dev/null || fail '服务账号
 install -d -m 755 "$BASE/releases"
 install -d -m 750 -o root -g "$APP_USER" "$BASE/shared"
 install -d -m 750 -o "$APP_USER" -g "$APP_USER" "$BASE/.npm-cache"
+install -d -m 750 -o "$APP_USER" -g "$APP_USER" "$DATA_DIR"
 install -d -m 755 -o "$APP_USER" -g "$APP_USER" "$RELEASE"
 if [[ -f "$SHARED_ENV" ]]; then cp -p "$SHARED_ENV" "$UPLOAD/previous.env"; fi
 if [[ -f "$UNIT_FILE" ]]; then cp -p "$UNIT_FILE" "$UPLOAD/previous.service"; fi
@@ -122,7 +126,7 @@ run_app() {
 # 服务安装包来自源码与 lock 文件，不上传本机 node_modules。
 # shellcheck disable=SC2016 # 此处是 JavaScript 模板字符串。
 run_app "$NODE_BIN" --env-file=.env --input-type=module -e '
-  for (const key of ["NEVA_API_KEY"]) {
+  for (const key of ["NEVA_API_KEY", "ALIYUN_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_SECRET", "ALIYUN_SMS_SIGN_NAME", "ALIYUN_SMS_TEMPLATE_CODE"]) {
     if (!process.env[key]?.trim()) {
       console.error(`缺少环境配置: ${key}`); process.exit(1);
     }
@@ -135,7 +139,7 @@ run_app "$NPM_BIN" run build
 CHECK_PORT=$(run_app "$NODE_BIN" --input-type=module -e 'import net from "node:net"; const server=net.createServer(); server.listen(0,"127.0.0.1",()=>{console.log(server.address().port);server.close()})')
 systemd-run --quiet --unit="$CHECK_UNIT" --uid="$APP_USER" --gid="$APP_USER" \
   --working-directory="$RELEASE" --setenv=NODE_ENV=production --setenv="PATH=$RUNTIME_PATH" \
-  --setenv="DEPLOYMENT_ID=$RELEASE_ID" \
+  --setenv="DEPLOYMENT_ID=$RELEASE_ID" --setenv="SIMING_DB_PATH=$DB_PATH" \
   "$NODE_BIN" "$RELEASE/node_modules/vinext/dist/cli.js" start --hostname 127.0.0.1 --port "$CHECK_PORT"
 wait_ready() {
   local port=$1 unit=$2 attempt
@@ -180,6 +184,7 @@ WorkingDirectory=$BASE/current
 Environment=NODE_ENV=production
 Environment=PATH=$RUNTIME_PATH
 Environment=DEPLOYMENT_ID=$RELEASE_ID
+Environment=SIMING_DB_PATH=$DB_PATH
 ExecStart=$NODE_BIN $BASE/current/node_modules/vinext/dist/cli.js start --hostname $HOST --port $PORT
 Restart=on-failure
 RestartSec=5

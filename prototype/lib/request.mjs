@@ -115,3 +115,12 @@ export function parseGuideRequest(payload) {
     history: parsedHistory,
   };
 }
+
+/** 把 RequestError、SmsError 转成 JSON 响应；其他错误记日志并返回 500。 */
+export function errorResponse(error) {
+  if (error instanceof RequestError || error?.name === 'SmsError') {
+    return Response.json({ error: error.message }, { status: error.status, headers: { 'Cache-Control': 'no-store' } });
+  }
+  console.error('Request failed:', error?.message);
+  return Response.json({ error: '出了点问题，请稍后再试。' }, { status: 500, headers: { 'Cache-Control': 'no-store' } });
+}

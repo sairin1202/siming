@@ -5,6 +5,7 @@ import {
   buildReadingMessages,
   detectSafetyMode,
 } from '@/lib/agent.mjs';
+import { currentUser } from '@/lib/auth.mjs';
 import { BaziInputError } from '@/lib/bazi.mjs';
 import { buildExtractionMessages, parseExtraction } from '@/lib/extract-llm.mjs';
 import {
@@ -33,6 +34,7 @@ type GuideEvent =
   | { type: 'delta'; content: string }
   | { type: 'end' }
   | { type: 'done' }
+  | { type: 'auth' }
   | { type: 'error'; message: string };
 
 type ChatMessage = { role: string; content: string };
@@ -47,6 +49,17 @@ class ProviderError extends Error {
     this.status = status;
     this.retryable = retryable;
   }
+}
+
+// 卦象、命盘、解读、追问和吉日都算「结果」，须登录后才给出。
+const RESULT_CARDS = new Set(['gua', 'chart', 'days']);
+function revealsResult(steps: Array<{ type: string; card?: { kind?: string } }>) {
+  return steps.some(
+    (step) =>
+      step.type === 'reading' ||
+      step.type === 'followup' ||
+      (step.type === 'card' && RESULT_CARDS.has(step.card?.kind ?? '')),
+  );
 }
 
 function eventChunk(event: GuideEvent) {
@@ -213,6 +226,7 @@ export async function POST(request: Request) {
   const state = sanitizeState(parsed.state);
   const profileBirth = sanitizeBirth(parsed.profile);
   const profile = isBirthComplete(profileBirth) ? profileBirth : null;
+  const signedIn = currentUser(request) !== null;
   const safetyMode = detectSafetyMode([state.question ?? '', parsed.message ?? ''].join('\n'));
 
   const abortController = new AbortController();
@@ -239,6 +253,12 @@ export async function POST(request: Request) {
           facts,
           now: new Date(),
         });
+        if (!signedIn && revealsResult(result.steps)) {
+          // 不推进状态：登录后客户端原样重发这次请求。
+          send({ type: 'auth' });
+          send({ type: 'done' });
+          return;
+        }
         send({ type: 'state', state: result.state });
 
         for (const step of result.steps) {

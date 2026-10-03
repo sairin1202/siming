@@ -1372,3 +1372,98 @@ button { cursor: pointer; }
   .verse-cards { width: 100%; }
   .decide-go, .decide-stop { font-size: 30px; }
 }
+
+/* ---------- Login ---------- */
+
+.login-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  border: 0;
+  cursor: default;
+  background: rgba(40, 36, 28, 0.35);
+  backdrop-filter: blur(4px);
+  animation: fade 240ms ease both;
+}
+.login {
+  position: fixed;
+  z-index: 51;
+  margin: 0;
+  border: 0;
+  color: var(--ink);
+  top: 50%;
+  left: 50%;
+  width: min(calc(100% - 32px), 380px);
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 30px 28px 24px;
+  background:
+    radial-gradient(ellipse at 100% 0%, rgba(27, 26, 23, 0.06), transparent 50%),
+    radial-gradient(ellipse at 0% 100%, rgba(27, 26, 23, 0.04), transparent 55%),
+    #f7f3ea;
+  border-radius: 6px 10px 7px 12px;
+  box-shadow: 0 18px 50px rgba(27, 26, 23, 0.22);
+  animation: fade 320ms ease both;
+}
+.login h2 { margin: 0; font-family: var(--brush); font-size: 28px; font-weight: 400; letter-spacing: 0.3em; color: var(--ink); filter: url(#ink-bleed); }
+.login-form { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.login-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+/* The brush line you write on, as in the answer box. */
+.login-field::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--ink) 0 75%, rgba(27, 26, 23, 0.25));
+  filter: url(#brush-stroke);
+  opacity: 0.45;
+  transition: opacity 300ms;
+}
+.login-field:focus-within::after { opacity: 0.9; }
+.login-field span { flex: none; width: 3.5em; font-size: 13px; letter-spacing: 0.15em; color: var(--ink-soft); }
+.login-field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 8px 2px;
+  font-size: 17px;
+  letter-spacing: 0.12em;
+  color: var(--ink);
+}
+.login-field input::placeholder { color: var(--ink-pale); letter-spacing: 0.08em; }
+.login-send {
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 4px 2px;
+  font-family: var(--brush);
+  font-size: 18px;
+  letter-spacing: 0.1em;
+  color: var(--ink);
+  filter: url(#ink-bleed);
+}
+.login-send:disabled { opacity: 0.3; cursor: default; }
+.login-error { min-height: 1.4em; margin: 0; font-size: 13px; color: var(--destructive); letter-spacing: 0.05em; }
+.login-submit { align-self: center; font-size: 24px; }
+.login-submit:disabled { opacity: 0.3; cursor: default; }
+.login-note { margin: 4px 0 0; text-align: center; font-size: 11px; letter-spacing: 0.1em; color: var(--ink-pale); }
+
+.account-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; letter-spacing: 0.1em; color: var(--ink-soft); }
+.account-line .ink-link { font-size: 16px; }
+.record-reading { grid-column: 1 / -1; margin: 4px 0 0; font-size: 13px; color: var(--ink-soft); }
+.record-reading summary { cursor: pointer; letter-spacing: 0.15em; color: var(--ink-pale); }
+.record-reading p { margin: 6px 0 0; white-space: pre-line; line-height: 1.8; }
+.login-invite { display: flex; justify-content: center; }
