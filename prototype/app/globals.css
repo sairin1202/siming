@@ -499,38 +499,6 @@ button { cursor: pointer; }
   vertical-align: middle;
   animation: breathe 1s ease-in-out infinite;
 }
-.verse-thinking { display: flex; justify-content: center; padding: 6px 0; animation: ink 600ms ease-out var(--enter) both; }
-
-/* A sea of ink cloud turning around a still centre; a wider, fainter veil turns behind it. */
-.ink-thinking {
-  position: relative;
-  display: block;
-  flex: none;
-  aspect-ratio: 1;
-  pointer-events: none;
-  animation: vortex-arrive 2.4s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-}
-.ink-thinking span {
-  position: absolute;
-  inset: 0;
-  background: url('/backgrounds/thinking.jpg') center / cover;
-  mix-blend-mode: multiply;
-  -webkit-mask-image: radial-gradient(circle closest-side, #000 55%, transparent 100%);
-  mask-image: radial-gradient(circle closest-side, #000 55%, transparent 100%);
-}
-.vortex-core { inset: 15%; opacity: 0.82; animation: vortex-turn 120s linear infinite, vortex-breathe 9s ease-in-out infinite; }
-.vortex-veil {
-  opacity: 0.3;
-  filter: blur(3px);
-  animation: vortex-turn 220s linear infinite reverse;
-}
-@keyframes vortex-turn { to { rotate: -360deg; } }
-@keyframes vortex-breathe { 0%, 100% { scale: 0.97; } 50% { scale: 1.03; } }
-@keyframes vortex-arrive { from { opacity: 0; transform: scale(0.86) rotate(24deg); filter: blur(6px); } }
-@media (prefers-reduced-motion: reduce) {
-  .ink-thinking, .ink-thinking span { animation: fade 1.2s ease both; }
-}
-
 /* ---------- Cards ---------- */
 
 /* A pool of bare paper under the words, feathered into the painting: no box, no shadow. */
@@ -1235,7 +1203,6 @@ button { cursor: pointer; }
   animation: ink-bloom 1.6s cubic-bezier(0.22, 0.8, 0.3, 1) both;
 }
 .ritual-name small { margin: 0 0.3em; font-size: 0.5em; color: var(--ink-soft); }
-.ritual-name.is-waiting { display: flex; justify-content: center; }
 
 /* The two ways in: 起卦 (ink-filled) and 观命 (outlined). */
 .mode-choice { display: flex; gap: clamp(28px, 6vw, 56px); justify-content: center; padding-bottom: 52px; }

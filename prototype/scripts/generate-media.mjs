@@ -110,16 +110,6 @@ const ASSETS = {
     output: 'videos/farewell.mp4',
     prompt: `An ink-wash landscape of misty mountain peaks; pale mist slowly rises and drifts across the scene, veiling the peaks one by one until only soft blank paper and a faint outline remain. ${STILL_INK}`,
   },
-  // While the guide divines: a vast vortex of ink mist, turned and breathed by CSS behind the verse.
-  // (happyhorse kept zooming into the spiral, so the motion is not generated.)
-  think: {
-    kind: 'image',
-    size: '1536x1024',
-    original: 'thinking.png',
-    output: 'backgrounds/thinking.jpg',
-    crop: [1024, 1024],
-    prompt: `Seen from directly above: a vast, majestic vortex of ink mist and cloud, like a sea of clouds slowly turning around a still centre, its spiral arms sweeping outward in broad, sweeping wet-on-wet washes from deep black near the centre to the palest grey at the edges, forming the gentle S-curve of a taiji. A single small dense dot of black ink at the very centre. The whole vortex is round and centred, filling about the middle two thirds of the height, with wide empty pale paper on the left, right, top and bottom. Grand, calm, spacious and solemn. ${STYLE} ${PALETTE} ${NO_TEXT}`,
-  },
   'bg-video': {
     kind: 'video',
     from: 'bg',

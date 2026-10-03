@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { InkThinking } from './thinking';
 import { InkWriting } from './writing';
 
 export type GuaCardData = {
@@ -171,7 +170,7 @@ export function CastRitual({
       {stage === 'reveal' && (
         <div className="ritual-center ritual-reveal" role="presentation" onClick={() => gua && onClose()}>
           <GuaFigure tosses={values} size={150} />
-          {gua ? (
+          {gua && (
             <p className="ritual-name">
               {gua.present.name}
               {gua.future && (
@@ -181,10 +180,6 @@ export function CastRitual({
                 </>
               )}
             </p>
-          ) : (
-            <div className="ritual-name is-waiting">
-              <InkThinking width="min(70vw, 280px)" label="卦名将现" />
-            </div>
           )}
         </div>
       )}

@@ -17,7 +17,6 @@ import { LoginDialog, StrayDialog, type Account } from '@/components/siming/logi
 import { MusicToggle } from '@/components/siming/music';
 import { dropOnWater } from '@/components/siming/ripples';
 import { InkScene } from '@/components/siming/scene';
-import { InkThinking } from '@/components/siming/thinking';
 import { InkWriting, toHanNumerals } from '@/components/siming/writing';
 
 type Lean = { lean: 'go' | 'wait' | 'stop'; until: string | null; score: number };
@@ -878,12 +877,6 @@ function VerseView({
           startDelay={entering ? 520 : 0}
           onDone={() => setWritten(true)}
         />
-      )}
-      {/* The brush waits for the whole reply so its layout is final before the first stroke. */}
-      {thinking && (
-        <div className="verse-thinking">
-          <InkThinking />
-        </div>
       )}
       {showCards && (
         <div className="verse-cards" ref={cardsRef}>
