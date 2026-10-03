@@ -496,17 +496,40 @@ button { cursor: pointer; }
   vertical-align: middle;
   animation: breathe 1s ease-in-out infinite;
 }
-.verse-thinking { display: flex; gap: 8px; padding: 6px 0; animation: ink 600ms ease-out var(--enter) both; }
-.verse-thinking span {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ink);
+.verse-thinking { display: flex; justify-content: center; padding: 6px 0; animation: ink 600ms ease-out var(--enter) both; }
+
+/* 圆相: drawn in one breath, held, then faded before the next. */
+.ink-thinking { display: block; flex: none; }
+.ink-thinking svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
   filter: url(#ink-rough);
-  animation: dot 1.2s ease-in-out infinite;
+  animation: enso-turn 16s linear infinite;
 }
-.verse-thinking span:nth-child(2) { animation-delay: 0.15s; }
-.verse-thinking span:nth-child(3) { animation-delay: 0.3s; }
+.ink-thinking path {
+  fill: none;
+  stroke: var(--ink);
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: enso-draw 2.8s cubic-bezier(0.55, 0.05, 0.3, 1) infinite;
+}
+.ink-thinking .enso-wash { stroke-width: 12; stroke-opacity: 0.14; animation-delay: 0.1s; }
+.ink-thinking .enso-body { stroke-width: 5; }
+.ink-thinking .enso-dry { stroke-width: 1.4; stroke-opacity: 0.55; animation-delay: 0.22s; }
+@keyframes enso-draw {
+  0% { stroke-dashoffset: 100; opacity: 0; }
+  6% { opacity: 1; }
+  52% { stroke-dashoffset: 0; opacity: 1; }
+  78% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+@keyframes enso-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .ink-thinking svg { animation: none; }
+  .ink-thinking path { stroke-dashoffset: 0; animation: breathe 2.4s ease-in-out infinite; }
+}
 
 /* ---------- Cards ---------- */
 
@@ -1212,7 +1235,7 @@ button { cursor: pointer; }
   animation: ink-bloom 1.6s cubic-bezier(0.22, 0.8, 0.3, 1) both;
 }
 .ritual-name small { margin: 0 0.3em; font-size: 0.5em; color: var(--ink-soft); }
-.ritual-name.is-waiting { color: var(--ink-pale); animation: breathe 1.2s ease-in-out infinite; }
+.ritual-name.is-waiting { display: flex; justify-content: center; }
 
 /* The two ways in: 起卦 (ink-filled) and 观命 (outlined). */
 .mode-choice { display: flex; gap: clamp(28px, 6vw, 56px); justify-content: center; padding-bottom: 52px; }

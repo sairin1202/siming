@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { extractFacts } from './extract.mjs';
+import { extractFacts, looksLikeNonsense } from './extract.mjs';
 
 const now = new Date(2026, 9, 2);
 const facts = (text) => extractFacts(text, now);
@@ -49,4 +49,15 @@ test('reads horizon, topic and confirmation', () => {
   assert.equal(facts('对的').confirmation, true);
   assert.equal(facts('不对，是下午').confirmation, false);
   assert.equal(facts('明天吃什么').confirmation, null);
+});
+
+test('tells gibberish from short but real words', () => {
+  for (const junk of ['asdfghjkl', 'qwer', 'sdfsdf', '哈哈哈', '嗯嗯', '？？？', '。。。', '1234', '啊', 'xkcdzq', '   ']) {
+    assert.equal(looksLikeNonsense(junk), true, junk);
+  }
+  for (const real of ['要不要辞职', '辞职', '谢谢', '起卦', '观命', 'offer', '换工作还是留下', 'should I quit']) {
+    assert.equal(looksLikeNonsense(real), false, real);
+  }
+  assert.equal(extractFacts('asdfgh').meaningful, false);
+  assert.equal(extractFacts('要不要换工作').meaningful, true);
 });

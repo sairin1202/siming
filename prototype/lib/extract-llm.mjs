@@ -6,6 +6,7 @@
 import lunar from 'lunar-javascript';
 
 import { TOPICS } from './bazi.mjs';
+import { looksLikeNonsense } from './extract.mjs';
 
 const { Lunar } = lunar;
 
@@ -33,7 +34,8 @@ JSON 结构：
                                              // 事业、财、学业或置产、创业或表达、合伙或人际、感情、其他
   "horizonMonths": 1 | 3 | 6 | 12 | null,    // 用户想看的时间范围：这个月 1，三个月或一季 3，半年 6，今年或一年 12
   "confirmation": "yes" | "no" | null,       // 司命请用户确认时，用户表示对、是、确认为 yes；表示不对、要改为 no
-  "isNewQuestion": true | false              // 用户是否提出了一件新的、需要推演的事
+  "isNewQuestion": true | false,             // 用户是否提出了一件新的、需要推演的事
+  "meaningful": true | false                 // 这句话是否有可理解的意思。乱码、随手乱敲的字、毫无意义的字词堆砌、故意胡言乱语为 false；简短但真诚的话（如“辞职”“好的”“对”“不知道”）为 true
 }
 `.trim();
 
@@ -139,5 +141,7 @@ export function parseExtraction(raw, message, now = new Date()) {
     newQuestion: isNewQuestion,
     questionText: question ?? message.trim(),
     confirmation: data.confirmation === 'yes' ? true : data.confirmation === 'no' ? false : null,
+    // Either reader can call it nonsense; the model's silence counts as sense.
+    meaningful: data.meaningful !== false && !looksLikeNonsense(message),
   };
 }

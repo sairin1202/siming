@@ -90,3 +90,9 @@ test('the guide uses model-read facts when given', () => {
   assert.equal(result.state.question, '要不要换工作');
   assert.equal(result.state.topic, 'career');
 });
+
+test('takes gibberish from the model or the local rules', () => {
+  assert.equal(parseExtraction({ meaningful: false, question: '为何' }, '饭桶爱上飞机').meaningful, false);
+  assert.equal(parseExtraction({ question: 'asdf' }, 'asdfgh').meaningful, false);
+  assert.equal(parseExtraction({ question: '要不要辞职' }, '要不要辞职').meaningful, true);
+});
