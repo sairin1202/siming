@@ -110,7 +110,11 @@ test('the hexagram template names the cast and quotes it', () => {
   const text = templateReading(payload);
   const { present, future } = payload.reading.gua;
   assert.ok(text.startsWith(`得${present.name}之${future.name}`));
-  assert.ok(text.replace(/\s/g, '').length <= 40);
+  const paragraphs = text.split('\n\n');
+  assert.equal(paragraphs.length, 4);
+  assert.ok(paragraphs[1].startsWith('所占之辞曰'));
+  assert.ok(paragraphs[2].includes(`由${present.name}而${future.name}`));
+  assert.doesNotMatch(text, /[，；。：、！？“”]/);
 });
 
 // ---------- 观命: the birth chart alone ----------
@@ -221,7 +225,10 @@ test('the chart template states the computed lean', () => {
   const text = templateReading(result.steps.at(-1).payload);
   const expected = { go: '利有攸往', wait: '宜待', stop: '未可强求' }[result.state.lean.lean];
   assert.ok(text.includes(expected));
-  assert.ok(text.replace(/\s/g, '').length <= 40);
+  const paragraphs = text.split('\n\n');
+  assert.equal(paragraphs.length, 5);
+  assert.ok(paragraphs[1].startsWith('日主'));
+  assert.ok(paragraphs[2].includes(`流年${result.steps.at(-1).payload.reading.signal.liunian.ganzhi}`));
 });
 
 // ---------- State from the client ----------

@@ -277,24 +277,46 @@ function guaCard(gua) {
 
 /** Plain-language reading used when the model is unavailable. */
 export function templateReading({ reading }) {
+  // Classical text is written without punctuation: breaks become spaces.
+  const plain = (text) => text.replace(/[，；。：、！？“”‘’《》「」]+/g, ' ').trim();
   if (reading.mode === 'gua') {
     const { gua } = reading;
-    // Name the cast, quote the opening of the words that answer it, then a plain word of counsel.
-    const cast = gua.future ? `得${gua.present.name}之${gua.future.name}` : `得${gua.present.name}`;
-    const text = gua.reading.map((item) => item.text).join('');
-    const clauses = gua.reading[0].text.split(/[，；。：]/).filter(Boolean);
-    let words = clauses[0];
-    if (words.length < 4 && clauses[1]) words += ` ${clauses[1]}`;
-    const counsel = /凶|厉|吝/.test(text) ? '慎之 勿轻动' : /吉|利|亨|无咎/.test(text) ? '可以行之' : '守正以待';
-    return [cast, words, counsel].join('\n\n');
+    const { present, future } = gua;
+    // Name the cast and its image, quote the words that answer it, then the turn and a word of counsel.
+    const cast = future ? `得${present.name}之${future.name}` : `得${present.name}`;
+    const quoted = gua.reading.map((item) => item.text);
+    const text = quoted.join('');
+    const lines = [`${cast} ${present.upper}上${present.lower}下 ${plain(present.image)}`];
+    lines.push(`所占之辞曰 ${plain(quoted.join(''))}`);
+    const judgment = quoted.includes(present.judgment) ? '' : `${present.name}之辞曰 ${plain(present.judgment)} `;
+    lines.push(
+      future
+        ? `${judgment}由${present.name}而${future.name} 事将有变 ${future.name}之辞曰 ${plain(future.judgment)}`
+        : `${judgment}六爻安静 事未有变 宜守其常`,
+    );
+    lines.push(
+      /凶|厉|吝/.test(text)
+        ? '辞有警惕之意 慎之 勿轻动 先察其势 再图进退'
+        : /吉|利|亨|无咎/.test(text)
+          ? '辞意多吉 可以行之 然当守正 勿恃其顺而怠'
+          : '辞意未定 守正以待 观其变而后动',
+    );
+    return lines.join('\n\n');
   }
-  const { timing, lean } = reading;
+  const { chart, signal, timing, lean } = reading;
   const short = (month) => `${Number(month.slice(5))}月`;
-  const verdict = lean.lean === 'go' ? '利有攸往' : lean.lean === 'wait' ? `宜待${short(lean.until)}` : '未可强求';
-  const time =
-    timing.best.month === timing.points[0].month ? '今正其时' : `${short(timing.best.month)}最宜`;
-  const close = lean.lean === 'stop' ? '必欲为之 小试可也' : '择吉日而行';
-  return [verdict, time, close].join('\n\n');
+  const verdict =
+    lean.lean === 'go' ? '利有攸往 此事可为' : lean.lean === 'wait' ? `宜待${short(lean.until)} 时至而后动` : '未可强求 当养其力';
+  const nature = `日主${chart.dayMaster.stem}${chart.dayMaster.element} ${chart.strength.label} 喜${chart.favorable.join('')}${chart.hourKnown ? '' : ' 时辰不详 所论其大略耳'}`;
+  const helped = signal.pros.length >= signal.cons.length;
+  const fortune = `${signal.dayun?.ganzhi ? `大运${signal.dayun.ganzhi} ` : ''}流年${signal.liunian.ganzhi} 流月${signal.liuyue.ganzhi} ${helped ? '助多而阻少' : '阻多而助少'}`;
+  const worst = timing.points.reduce((low, point) => (point.score < low.score ? point : low), timing.points[0]);
+  const time = [
+    timing.best.month === timing.points[0].month ? '今正其时' : `${short(timing.best.month)}最宜`,
+    ...(worst.month !== timing.best.month && worst.score < timing.best.score ? [`${short(worst.month)}宜缓`] : []),
+  ].join(' ');
+  const close = lean.lean === 'stop' ? '必欲为之 小试可也 量力而行' : '择吉日而行 量入为出 勿贪其速';
+  return [verdict, nature, fortune, time, close].join('\n\n');
 }
 
 export const FOLLOWUP_FALLBACK =
