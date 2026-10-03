@@ -68,44 +68,29 @@ npm run dev
 
 验证命令：`npm test`、`npx tsc --noEmit`、`npm run lint` 和 `npm run build`。
 
-## Node 服务器发布
+## 发布
 
-在本机项目根目录执行：
-
-```bash
-./deploy/deploy.sh --dry-run   # 只检查打包，不连接服务器
-./deploy/deploy.sh            # 发布到 root@212.64.23.79:/opt/angel_devil
-```
-
-服务器需要 Linux、systemd、安装到系统路径的 Node.js >=22.13、npm、curl 和 tar；SSH 账号需要 root 或免密 sudo。使用服务器现有 SSH 密钥、口令或扫码认证。首次发布读取本机 `prototype/.env`，通过 SSH 单独传输配置，后续保留服务器已有配置。
-
-自定义登录和配置：
-
-```bash
-SSH_TARGET=ubuntu@212.64.23.79 SSH_KEY="$HOME/.ssh/id_ed25519" ./deploy/deploy.sh
-ENV_FILE=/path/to/server.env ./deploy/deploy.sh --update-env
-# 使用 ~/.ssh/config 中的别名也可以：SSH_TARGET=angel-server ./deploy/deploy.sh
-```
-
-脚本上传源码和依赖锁文件，在服务器执行 `npm ci`、单元测试和生产构建。页面与 `GET /api/health` 检查通过后，才切换正式版本，启动或重启 `angel-devil.service`。运行失败会恢复旧版本及环境配置。旧版本保留在 `releases/`，发布锁防止同时部署。
-
-服务器目录：
+本机的 `/root/project/siming` 就是线上版本：systemd 服务 `angel-devil.service` 直接从 `prototype/` 运行，监听 `127.0.0.1:3000`，前面由反向代理转发（`.env` 中 `VINEXT_TRUST_PROXY=1`）。
 
 ```text
-/opt/angel_devil/
-├── current -> releases/<版本号>
-├── releases/<版本号>/       # 源码、Linux 依赖和生产构建
-├── shared/.env              # 仅 root 和服务账号可读
-└── shared/data/siming.db    # 用户、会话与问事记录（SQLite，跨版本保留，请定期备份）
+prototype/.env              # 线上配置（不入 git）
+prototype/data/siming.db    # 用户、会话、生辰与问事记录（SQLite，不入 git，请定期备份）
+prototype/dist/             # 生产构建
 ```
 
-默认访问地址为 `http://212.64.23.79:3000`，需要在服务器防火墙及腾讯云安全组允许 TCP 3000。可用 `APP_PORT=其他端口` 覆盖。服务由专用账号 `angel-devil` 运行，systemd 提供开机启动和异常重启。在服务器查看状态与日志：
+发布新改动：
 
 ```bash
-sudo systemctl status angel-devil
-sudo journalctl -u angel-devil -f
-sudo systemctl restart angel-devil
+cd prototype
+npm test && npm run build
+systemctl restart angel-devil
+curl -s localhost:3000/api/health
 ```
 
-若前面接 Nginx，可用 `APP_HOST=127.0.0.1` 发布，并在 `shared/.env` 设置 `VINEXT_TRUST_PROXY=1`；Nginx 应转发原始 `Host`、`X-Forwarded-Proto`，并关闭流式接口的代理缓冲。
+查看状态与日志：
+
+```bash
+systemctl status angel-devil
+journalctl -u angel-devil -f
+```
 - [ ] 完成 MVP
