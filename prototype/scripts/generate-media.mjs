@@ -110,6 +110,17 @@ const ASSETS = {
     output: 'videos/farewell.mp4',
     prompt: `An ink-wash landscape of misty mountain peaks; pale mist slowly rises and drifts across the scene, veiling the peaks one by one until only soft blank paper and a faint outline remain. ${STILL_INK}`,
   },
+  // While the guide divines: shown small and round over the verse, blended into the paper.
+  'think-video': {
+    kind: 'video',
+    size: '1280x720',
+    seconds: '8',
+    crop: [720, 720, 480],
+    // The first and last second can show a hard-edged dish; keep the billowing middle.
+    trim: [1.5, 7.8],
+    output: 'videos/thinking.mp4',
+    prompt: `Close-up of black ink slowly billowing and unfurling in clear still water against a flat pale off-white background, like smoke: soft feathered clouds of ink curl, swirl gently and dissolve into delicate grey wisps that fade into the pale ground. The ink cloud stays in the middle of the frame with wide empty pale space on every side. Flat even light, no shadows, no hard edges, no droplets, no objects, no vessel, no water surface, no reflections. ${STILL_INK}`,
+  },
   'bg-video': {
     kind: 'video',
     from: 'bg',
@@ -267,10 +278,14 @@ async function generateVideo(name, asset, force, resumeTask) {
   // Ping-pong ambient clips into a seamless loop; one-shot clips play forward.
   // Either way drop the audio and keep the file web-light.
   ensureDir(output);
+  // An optional [width, height, size] crops the centre and scales it to a square.
+  const crop =
+    (asset.trim ? `trim=start=${asset.trim[0]}:end=${asset.trim[1]},setpts=PTS-STARTPTS,` : '') +
+    (asset.crop ? `crop=${asset.crop[0]}:${asset.crop[1]},scale=${asset.crop[2]}:${asset.crop[2]},` : '');
   const filter =
     asset.loop === false
-      ? '[0:v]null[v]'
-      : '[0:v]split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1[v]';
+      ? `[0:v]${crop}null[v]`
+      : `[0:v]${crop}split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1[v]`;
   execFileSync('ffmpeg', [
     '-y', '-loglevel', 'error', '-i', raw,
     '-filter_complex', filter,
